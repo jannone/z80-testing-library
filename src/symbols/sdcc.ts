@@ -156,6 +156,9 @@ export function parseStaticSymbols(
   return result
 }
 
+/** Array of .lst file contents in link order. Use SdccSymbolProvider.parseLk() to create. */
+export type OrderedLstContents = string[] & { readonly __brand: 'OrderedLstContents' }
+
 /**
  * SymbolProvider implementation for SDCC-compiled programs.
  * Resolves both exported (.noi) and static (.lst) symbols.
@@ -164,11 +167,25 @@ export class SdccSymbolProvider implements SymbolProvider {
   private noiSymbols: SymbolMap
   private staticSymbols: Map<string, number> | null
 
-  constructor(noiContent: string, lstContents?: string[]) {
+  constructor(noiContent: string, lstContents?: OrderedLstContents) {
     this.noiSymbols = parseNoi(noiContent)
     this.staticSymbols = lstContents
       ? parseStaticSymbols(lstContents, this.noiSymbols)
       : null
+  }
+
+  /**
+   * Parse .lk content and return .lst contents in link order.
+   * Keys in lstContents are basenames (without extension) matching the .rel entries in the .lk file.
+   */
+  static parseLk(lkContent: string, lstContents: Record<string, string>): OrderedLstContents {
+    return lkContent
+      .split('\n')
+      .map(line => line.trim().match(/^(\S+)\.rel\s*$/))
+      .filter((m): m is RegExpMatchArray => m !== null)
+      .map(m => m[1])
+      .filter(name => name in lstContents)
+      .map(name => lstContents[name]) as OrderedLstContents
   }
 
   /** Create from file paths (convenience for loading from disk) */
@@ -178,25 +195,22 @@ export class SdccSymbolProvider implements SymbolProvider {
       return new SdccSymbolProvider(noiContent)
     }
 
-    // Try to read link order from .lk file (produced by SDCC linker)
     const lkPath = noiPath.replace(/\.noi$/, '.lk')
-    const allLst = new Set(readdirSync(lstDir).filter((f: string) => f.endsWith('.lst')))
-    let orderedLst: string[]
+    const allLst = readdirSync(lstDir).filter((f: string) => f.endsWith('.lst'))
 
+    let ordered: OrderedLstContents
     if (existsSync(lkPath)) {
       const lkContent = readFileSync(lkPath, 'utf-8')
-      orderedLst = lkContent
-        .split('\n')
-        .map(line => line.trim().match(/^(\S+)\.rel\s*$/))
-        .filter((m): m is RegExpMatchArray => m !== null)
-        .map(m => m[1] + '.lst')
-        .filter(f => allLst.has(f))
+      const lstByName: Record<string, string> = {}
+      for (const f of allLst) {
+        lstByName[f.replace(/\.lst$/, '')] = readFileSync(resolve(lstDir, f), 'utf-8')
+      }
+      ordered = SdccSymbolProvider.parseLk(lkContent, lstByName)
     } else {
-      orderedLst = [...allLst]
+      ordered = allLst.map(f => readFileSync(resolve(lstDir, f), 'utf-8')) as OrderedLstContents
     }
 
-    const lstContents = orderedLst.map(f => readFileSync(resolve(lstDir, f), 'utf-8'))
-    return new SdccSymbolProvider(noiContent, lstContents)
+    return new SdccSymbolProvider(noiContent, ordered)
   }
 
   resolve(name: string): number | undefined {

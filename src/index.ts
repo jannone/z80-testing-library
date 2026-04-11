@@ -27,6 +27,7 @@ export {
 // Symbols
 export {
   SdccSymbolProvider,
+  type OrderedLstContents,
 } from './symbols/sdcc.js'
 
 // Adapters — MSX

@@ -225,20 +225,25 @@ vdp.clearAll()                     // clear everything including VRAM
 
 ### SdccSymbolProvider
 
-Symbol resolution for programs compiled with SDCC. Parses `.noi` content for exported symbols and optionally `.lst` content for static (non-exported) symbols.
+Symbol resolution for programs compiled with SDCC. Parses `.noi` content for exported symbols and `.lst` content for static (non-exported) symbols. See [Appendix: How SDCC Symbol Resolution Works](#appendix-how-sdcc-symbol-resolution-works) for details on why both file types are needed.
 
 ```typescript
 import { SdccSymbolProvider } from 'z80-testing-library'
 
-// From file paths (convenience)
-const symbols = SdccSymbolProvider.fromFiles('game.noi', './build')
+// From file paths (convenience — reads .noi, .lk, and .lst files automatically)
+const symbols = SdccSymbolProvider.fromFiles('build/game.noi', './build')
 
 // From content strings (no I/O — useful for testing or non-filesystem sources)
-const symbols = new SdccSymbolProvider(noiContent, [lstContent1, lstContent2])
+const ordered = SdccSymbolProvider.parseLk(lkContent, {
+  main: mainLstContent,
+  physics: physicsLstContent,
+  render: renderLstContent,
+})
+const symbols = new SdccSymbolProvider(noiContent, ordered)
 
-symbols.resolve('my_function')    // → 0x4030
-symbols.resolve('static_helper')  // → 0x4120 (from .lst content)
-symbols.has('my_function')        // → true
+symbols.resolve('game_loop')       // → 0x400B (exported function)
+symbols.resolve('clamp_position')  // → 0x4018 (static function, from .lst)
+symbols.has('game_loop')           // → true
 ```
 
 ### Utility Functions
@@ -483,6 +488,79 @@ export function createSpectrumTestbed(config) {
    ```
 
 7. **No file I/O in the core.** The `Z80TestMachine` and `SdccSymbolProvider` constructor accept raw data (`Uint8Array`, content strings), not file paths. Use `SdccSymbolProvider.fromFiles()` or `readFileSync` for disk loading, or provide data directly for browser-compatible usage.
+
+## Appendix: How SDCC Symbol Resolution Works
+
+When you compile a C program with SDCC, the toolchain produces several artifact files. Understanding which ones matter — and why — helps explain how this library resolves function and variable addresses for testing.
+
+### Exported vs. static symbols
+
+In C, symbols (functions and variables) are **exported** by default — the linker can see them across files. Marking a symbol `static` makes it **file-local**: invisible to the linker, callable only within its own source file.
+
+```c
+void game_loop(void) { ... }           // exported — visible to linker
+static void clamp_position(void) { ... } // static — file-local, invisible to linker
+
+uint8_t score = 0;                      // exported variable
+static uint8_t collision_count = 0;     // static variable
+```
+
+Normally you'd only test exported functions — they define the public interface of each module. But on a retro platform with tight ROM constraints, functions tend to be large and deeply intertwined. Testing through exported entry points alone may require complex setup or provide limited observability. Being able to call static helpers directly gives you a more practical way to isolate behavior:
+
+```typescript
+m.runFunction('clamp_position')  // call a static function directly
+m.readByte(m.sym('collision_count'))  // read a static variable
+```
+
+### SDCC build artifacts
+
+```
+source.c  →  sdcc -c  →  source.rel, source.lst, ...
+                              ↓
+              sdcc -o  →  game.ihx, game.noi, game.lk, game.map
+                              ↓
+           sdobjcopy   →  game.rom
+```
+
+| File | Produced by | Contains |
+|---|---|---|
+| `.noi` | Linker | Exported symbol addresses (absolute, final) and segment bases |
+| `.lst` | Compiler | All labels (exported and static) with local offsets per area |
+| `.lk` | Linker | Link order of `.rel` files |
+| `.map` | Linker | Human-readable summary (exported symbols, area layout, link order) |
+| `.rom` | objcopy | The binary ROM image loaded into the emulator |
+
+### Why we need each file
+
+**`.noi`** provides the ground truth for exported symbols — their final absolute addresses after linking. This is the primary symbol source.
+
+**`.lst`** files are needed for static symbols. Each `.lst` file contains labels with local offsets within their `.area` section. By finding an exported label that appears in both the `.lst` and `.noi`, the library computes the area's base address and resolves static labels relative to it.
+
+**`.lk`** provides the link order of source files. This matters because the linker concatenates each file's contribution to shared areas (like `_DATA` or `_INITIALIZED`) in this order. When a static symbol has no exported anchor in its area, the library uses the cumulative sizes of prior files to compute the correct base address.
+
+### How resolution works
+
+1. **Exported symbols**: looked up directly from `.noi` content (name → absolute address).
+
+2. **Static symbols with an exported anchor**: if the same `.lst` file has an exported label in the same area, the library computes `base = noi_address - local_offset` and resolves the static label relative to that base.
+
+3. **Static symbols without an anchor**: the library accumulates per-file area sizes (from `.ds` directives in `.lst` files) across all files in link order, then computes `base = segment_start + cumulative_offset_of_prior_files`.
+
+### Using `fromFiles` vs. the constructor
+
+`SdccSymbolProvider.fromFiles(noiPath, lstDir)` handles everything automatically — reads the `.noi`, parses the `.lk` for link order, and loads `.lst` files in the correct sequence.
+
+For manual control (or non-filesystem sources), use `parseLk` to establish the correct order, then pass content strings to the constructor:
+
+```typescript
+const ordered = SdccSymbolProvider.parseLk(lkContent, {
+  main: mainLstContent,
+  physics: physicsLstContent,
+})
+const provider = new SdccSymbolProvider(noiContent, ordered)
+```
+
+The `OrderedLstContents` branded type returned by `parseLk` ensures the constructor receives correctly ordered content — passing a plain `string[]` is a type error.
 
 ## License
 

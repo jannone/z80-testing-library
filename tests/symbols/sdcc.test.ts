@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { writeFileSync, mkdirSync, rmSync } from 'fs'
 import { resolve } from 'path'
 import { tmpdir } from 'os'
-import { parseNoi, parseStaticSymbols, SdccSymbolProvider } from '../../src/symbols/sdcc.js'
+import { parseNoi, parseStaticSymbols, SdccSymbolProvider, type OrderedLstContents } from '../../src/symbols/sdcc.js'
 
 describe('parseNoi', () => {
   it('parses DEF lines into symbol maps', () => {
@@ -78,7 +78,9 @@ describe('SdccSymbolProvider', () => {
       '   00000010  2\t_static_helper:',
     ].join('\n')
 
-    const provider = new SdccSymbolProvider(noiContent, [lstContent])
+    const lkContent = 'test.rel\n'
+    const ordered = SdccSymbolProvider.parseLk(lkContent, { test: lstContent })
+    const provider = new SdccSymbolProvider(noiContent, ordered)
 
     // exported_func is at offset 0 in _CODE, absolute 0x4100
     // static_helper is at offset 0x10, so absolute 0x4100 + 0x10 = 0x4110
@@ -106,7 +108,9 @@ describe('SdccSymbolProvider', () => {
       '   00000004  9\t\t.ds 1',
     ].join('\n')
 
-    const provider = new SdccSymbolProvider(noiContent, [lstContent])
+    const lkContent = 'test.rel\n'
+    const ordered = SdccSymbolProvider.parseLk(lkContent, { test: lstContent })
+    const provider = new SdccSymbolProvider(noiContent, ordered)
 
     // CODE symbols still resolve via exported anchor
     expect(provider.resolve('static_helper')).toBe(0x4110)
@@ -170,13 +174,39 @@ describe('SdccSymbolProvider', () => {
       '   00000000  4\t\t.ds 1',
     ].join('\n')
 
-    const provider = new SdccSymbolProvider(noiContent, [mainLst, physicsLst, renderLst])
+    const lkContent = 'main.rel\nphysics.rel\nrender.rel\n'
+    const ordered = SdccSymbolProvider.parseLk(lkContent, {
+      main: mainLst,
+      physics: physicsLst,
+      render: renderLst,
+    })
+    const provider = new SdccSymbolProvider(noiContent, ordered)
 
     // Anchored symbols resolve correctly
     expect(provider.resolve('collision_count')).toBe(0xC089) // 0xC085 + 4
 
     // sprite_count must use cumulative offset: s__INITIALIZED + 3 (main) + 5 (physics) = 0xC08A
     expect(provider.resolve('sprite_count')).toBe(0xC08A)
+  })
+
+  it('parseLk orders lst contents by link order and skips missing entries', () => {
+    const lkContent = [
+      '-mjwx',
+      '-i game.ihx',
+      'bbb.rel',
+      'aaa.rel',
+      'missing.rel',
+      '-e',
+    ].join('\n')
+
+    const ordered = SdccSymbolProvider.parseLk(lkContent, {
+      aaa: 'content_aaa',
+      bbb: 'content_bbb',
+    })
+
+    expect(ordered).toHaveLength(2)
+    expect(ordered[0]).toBe('content_bbb')
+    expect(ordered[1]).toBe('content_aaa')
   })
 
   it('fromFiles reads .lst files in link order from .lk file', () => {
@@ -260,7 +290,9 @@ describe('SdccSymbolProvider', () => {
       '   00000008  6\t\t.ds 1',
     ].join('\n')
 
-    const provider = new SdccSymbolProvider(noiContent, [file1, file2])
+    const lkContent = 'a.rel\nb.rel\n'
+    const ordered = SdccSymbolProvider.parseLk(lkContent, { a: file1, b: file2 })
+    const provider = new SdccSymbolProvider(noiContent, ordered)
 
     // file1 has no anchor: cumulative offset = 0, so base = 0xC000 + 0 = 0xC000
     expect(provider.resolve('local_a')).toBe(0xC000)
