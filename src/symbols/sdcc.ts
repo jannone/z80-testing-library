@@ -1,5 +1,5 @@
-import { readFileSync, readdirSync } from 'fs'
-import { resolve } from 'path'
+import { readFileSync, readdirSync, existsSync } from 'fs'
+import { resolve, dirname } from 'path'
 import type { SymbolProvider } from '../core/types.js'
 
 export interface SymbolMap {
@@ -48,19 +48,62 @@ export function parseStaticSymbols(
 ): Map<string, number> {
   const result = new Map<string, number>()
 
-  for (const content of lstContents) {
-    interface LabelInfo {
-      name: string
-      offset: number
-      exported: boolean
-      area: string
-    }
+  const areaRegex = /\s+\d+\s+\.area\s+(\w+)/
+  const labelRegex = /^\s+([0-9A-Fa-f]{8})\s+\d+\s+(_\w+)(::?)\s*$/
+  const dsRegex = /^\s+([0-9A-Fa-f]{8})\s+\d+\s+\.ds\s+(\d+)/
 
-    const labels: LabelInfo[] = []
+  interface LabelInfo {
+    name: string
+    offset: number
+    exported: boolean
+    area: string
+  }
+
+  // First pass: compute each file's contribution size per area
+  const fileSizes: Map<string, number>[] = []
+
+  for (const content of lstContents) {
+    const sizes = new Map<string, number>()
     let currentArea = ''
 
-    const areaRegex = /\s+\d+\s+\.area\s+(\w+)/
-    const labelRegex = /^\s+([0-9A-Fa-f]{8})\s+\d+\s+(_\w+)(::?)\s*$/
+    for (const line of content.split('\n')) {
+      const areaMatch = line.match(areaRegex)
+      if (areaMatch) {
+        currentArea = areaMatch[1]
+        continue
+      }
+
+      const dsMatch = line.match(dsRegex)
+      if (dsMatch && currentArea) {
+        const offset = parseInt(dsMatch[1], 16)
+        const size = parseInt(dsMatch[2], 10)
+        const end = offset + size
+        sizes.set(currentArea, Math.max(sizes.get(currentArea) ?? 0, end))
+      }
+    }
+
+    fileSizes.push(sizes)
+  }
+
+  // Build cumulative offsets per area (running sum of prior files' sizes)
+  const allAreas = new Set(fileSizes.flatMap(s => [...s.keys()]))
+  const cumulativeOffsets: Map<string, number[]> = new Map()
+
+  for (const area of allAreas) {
+    const offsets: number[] = []
+    let running = 0
+    for (const sizes of fileSizes) {
+      offsets.push(running)
+      running += sizes.get(area) ?? 0
+    }
+    cumulativeOffsets.set(area, offsets)
+  }
+
+  // Second pass: resolve labels
+  for (let fileIndex = 0; fileIndex < lstContents.length; fileIndex++) {
+    const content = lstContents[fileIndex]
+    const labels: LabelInfo[] = []
+    let currentArea = ''
 
     for (const line of content.split('\n')) {
       const areaMatch = line.match(areaRegex)
@@ -91,12 +134,13 @@ export function parseStaticSymbols(
       }
     }
 
-    // Fallback: use segment base from .noi (e.g. s__DATA for .area _DATA)
+    // Fallback: segment base + cumulative offset from prior files
     for (const label of labels) {
       if (areaBases.has(label.area)) continue
       const segBase = noiSymbols.raw.get(`s_${label.area}`)
       if (segBase !== undefined) {
-        areaBases.set(label.area, segBase)
+        const cumOffset = cumulativeOffsets.get(label.area)?.[fileIndex] ?? 0
+        areaBases.set(label.area, segBase + cumOffset)
       }
     }
 
@@ -130,11 +174,28 @@ export class SdccSymbolProvider implements SymbolProvider {
   /** Create from file paths (convenience for loading from disk) */
   static fromFiles(noiPath: string, lstDir?: string): SdccSymbolProvider {
     const noiContent = readFileSync(noiPath, 'utf-8')
-    const lstContents = lstDir
-      ? readdirSync(lstDir)
-          .filter((f: string) => f.endsWith('.lst'))
-          .map((f: string) => readFileSync(resolve(lstDir, f), 'utf-8'))
-      : undefined
+    if (!lstDir) {
+      return new SdccSymbolProvider(noiContent)
+    }
+
+    // Try to read link order from .lk file (produced by SDCC linker)
+    const lkPath = noiPath.replace(/\.noi$/, '.lk')
+    const allLst = new Set(readdirSync(lstDir).filter((f: string) => f.endsWith('.lst')))
+    let orderedLst: string[]
+
+    if (existsSync(lkPath)) {
+      const lkContent = readFileSync(lkPath, 'utf-8')
+      orderedLst = lkContent
+        .split('\n')
+        .map(line => line.trim().match(/^(\S+)\.rel\s*$/))
+        .filter((m): m is RegExpMatchArray => m !== null)
+        .map(m => m[1] + '.lst')
+        .filter(f => allLst.has(f))
+    } else {
+      orderedLst = [...allLst]
+    }
+
+    const lstContents = orderedLst.map(f => readFileSync(resolve(lstDir, f), 'utf-8'))
     return new SdccSymbolProvider(noiContent, lstContents)
   }
 
