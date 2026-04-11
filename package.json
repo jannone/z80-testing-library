@@ -1,6 +1,6 @@
 {
   "name": "z80-testing-library",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Headless Z80 unit testing library with pluggable platform adapters",
   "type": "module",
   "main": "dist/index.js",
