@@ -1,7 +1,7 @@
 {
   "name": "z80-testing-library",
   "version": "0.1.0",
-  "description": "Headless MSX/Z80 unit testing library for SDCC-compiled ROMs",
+  "description": "Headless Z80 unit testing library with pluggable platform adapters",
   "type": "module",
   "main": "dist/index.js",
   "module": "dist/index.js",

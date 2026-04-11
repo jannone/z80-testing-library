@@ -1,10 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { parseNoi } from '../src/symbols.js'
+import { parseNoi, parseStaticSymbols, SdccSymbolProvider } from '../../src/symbols/sdcc.js'
 import { writeFileSync, unlinkSync, mkdirSync } from 'fs'
 import { resolve } from 'path'
 import { tmpdir } from 'os'
 
-const TMP_DIR = resolve(tmpdir(), 'msx-test-lib-test')
+const TMP_DIR = resolve(tmpdir(), 'z80-test-lib-test')
 
 function writeTmpFile(name: string, content: string): string {
   mkdirSync(TMP_DIR, { recursive: true })
@@ -73,5 +73,49 @@ describe('parseNoi', () => {
     expect(symbols.clean.get('upper')).toBe(0xABCD)
 
     unlinkSync(path)
+  })
+})
+
+describe('SdccSymbolProvider', () => {
+  it('implements SymbolProvider interface', () => {
+    const path = writeTmpFile('provider.noi', [
+      'DEF _my_func 0x4030',
+      'DEF _my_var 0xC000',
+    ].join('\n'))
+
+    const provider = new SdccSymbolProvider(path)
+
+    expect(provider.has('my_func')).toBe(true)
+    expect(provider.has('my_var')).toBe(true)
+    expect(provider.has('nonexistent')).toBe(false)
+
+    expect(provider.resolve('my_func')).toBe(0x4030)
+    expect(provider.resolve('my_var')).toBe(0xC000)
+    expect(provider.resolve('nonexistent')).toBeUndefined()
+
+    unlinkSync(path)
+  })
+
+  it('resolves static symbols when lstDir is provided', () => {
+    // Create a .noi file with one exported symbol
+    const noiPath = writeTmpFile('static.noi', 'DEF _exported_func 0x4100\n')
+
+    // Create a .lst file with both exported and static labels in a _CODE area
+    const lstContent = [
+      '                              1\t.area _CODE',
+      '   00000000  1\t_exported_func::',
+      '   00000010  2\t_static_helper:',
+    ].join('\n')
+    writeTmpFile('static.lst', lstContent)
+
+    const provider = new SdccSymbolProvider(noiPath, TMP_DIR)
+
+    // exported_func is at offset 0 in _CODE, absolute 0x4100
+    // static_helper is at offset 0x10, so absolute 0x4100 + 0x10 = 0x4110
+    expect(provider.has('static_helper')).toBe(true)
+    expect(provider.resolve('static_helper')).toBe(0x4110)
+
+    unlinkSync(noiPath)
+    unlinkSync(resolve(TMP_DIR, 'static.lst'))
   })
 })

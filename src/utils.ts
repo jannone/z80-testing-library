@@ -1,4 +1,5 @@
-import type { Z80Machine } from './machine.js'
+import { readFileSync } from 'fs'
+import type { MachineInterface } from './core/types.js'
 
 /**
  * Push a 1-byte value onto the Z80 stack.
@@ -7,7 +8,7 @@ import type { Z80Machine } from './machine.js'
  *
  * Push arguments in reverse order (last arg first) to match C calling order.
  */
-export function pushStackArg(m: Z80Machine, value: number): void {
+export function pushStackArg(m: MachineInterface, value: number): void {
   m.regs.sp = (m.regs.sp - 1) & 0xFFFF
   m.writeByte(m.regs.sp, value & 0xFF)
 }
@@ -19,4 +20,10 @@ export function pushStackArg(m: Z80Machine, value: number): void {
  */
 export function signed8(val: number): number {
   return val > 127 ? val - 256 : val
+}
+
+/** Load a binary file as a Uint8Array suitable for passing as ROM data */
+export function loadRom(path: string): Uint8Array {
+  const buf = readFileSync(path)
+  return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength)
 }

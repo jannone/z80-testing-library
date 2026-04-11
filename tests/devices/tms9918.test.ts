@@ -1,11 +1,11 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { VdpCapture, VDP_LAYOUT } from '../src/vdp-capture.js'
+import { Tms9918, TMS9918_LAYOUT } from '../../src/devices/tms9918.js'
 
-describe('VdpCapture', () => {
-  let vdp: VdpCapture
+describe('Tms9918', () => {
+  let vdp: Tms9918
 
   beforeEach(() => {
-    vdp = new VdpCapture()
+    vdp = new Tms9918()
   })
 
   describe('register writes via control port', () => {
@@ -106,7 +106,7 @@ describe('VdpCapture', () => {
 
   describe('SAT entry reading', () => {
     it('reads a sprite attribute entry', () => {
-      const base = VDP_LAYOUT.SAT
+      const base = TMS9918_LAYOUT.SAT
       vdp.writeVram(base + 0, 100)  // Y
       vdp.writeVram(base + 1, 50)   // X
       vdp.writeVram(base + 2, 8)    // pattern
@@ -117,7 +117,7 @@ describe('VdpCapture', () => {
     })
 
     it('reads different SAT indices', () => {
-      const base = VDP_LAYOUT.SAT + 2 * 4 // entry 2
+      const base = TMS9918_LAYOUT.SAT + 2 * 4 // entry 2
       vdp.writeVram(base + 0, 200)
       vdp.writeVram(base + 1, 150)
       vdp.writeVram(base + 2, 16)
@@ -130,7 +130,7 @@ describe('VdpCapture', () => {
 
   describe('PNT tile reading', () => {
     it('reads a tile from the Pattern Name Table', () => {
-      const pntBase = VDP_LAYOUT.PNT
+      const pntBase = TMS9918_LAYOUT.PNT
       vdp.writeVram(pntBase + 5 * 32 + 10, 0x42) // row 5, col 10
 
       expect(vdp.readPntTile(10, 5)).toBe(0x42)

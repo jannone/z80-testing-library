@@ -1,36 +1,49 @@
+// Core
 export {
-  Z80Machine,
-  type MachineConfig,
+  Z80TestMachine,
+  type Z80TestMachineConfig,
+} from './core/machine.js'
+
+export {
+  type MemoryMap,
+  type Hardware,
+  type SymbolProvider,
   type PcHook,
   type PortReadHandler,
   type PortWriteHandler,
   type MemoryRegion,
-} from './machine.js'
+  type MachineInterface,
+} from './core/types.js'
 
+// Devices
 export {
-  MsxMachine,
-  MSX_BIOS,
-  type MsxMachineConfig,
-} from './msx.js'
-
-export {
-  VdpCapture,
-  VDP_LAYOUT,
+  Tms9918,
+  TMS9918_LAYOUT,
   type VdpRegisterWrite,
   type VramWrite,
   type SatEntry,
-} from './vdp-capture.js'
+} from './devices/tms9918.js'
 
+// Symbols
 export {
+  SdccSymbolProvider,
   parseNoi,
-  type SymbolMap,
-} from './symbols.js'
-
-export {
   parseStaticSymbols,
-} from './static-symbols.js'
+  type SymbolMap,
+} from './symbols/sdcc.js'
 
+// Adapters — MSX
+export {
+  createMsxTestbed,
+  MSX_BIOS,
+  msxMemoryMap,
+  type MsxTestbedConfig,
+  type MsxTestbed,
+} from './adapters/msx/index.js'
+
+// Utilities
 export {
   pushStackArg,
   signed8,
+  loadRom,
 } from './utils.js'
