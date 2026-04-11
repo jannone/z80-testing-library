@@ -29,6 +29,7 @@
     "emulator",
     "retro"
   ],
+  "author": "Rafael Jannone <jannone@gmail.com>",
   "license": "MIT",
   "devDependencies": {
     "@types/node": "^25.6.0",
