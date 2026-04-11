@@ -39,7 +39,9 @@ export function parseNoi(path: string): SymbolMap {
  * 1. For each .lst file, collect all labels grouped by their .area section.
  * 2. For each area, find an exported label that exists in the .noi symbols.
  * 3. Compute area base = noi_absolute_addr - lst_local_offset.
- * 4. Resolve static labels in the same area using that base.
+ * 4. For areas with no exported anchor, fall back to the segment base
+ *    from the .noi file (e.g. s__DATA for .area _DATA).
+ * 5. Resolve static labels in the same area using that base.
  */
 export function parseStaticSymbols(
   lstDir: string,
@@ -93,6 +95,15 @@ export function parseStaticSymbols(
       const absAddr = noiSymbols.clean.get(label.name)
       if (absAddr !== undefined) {
         areaBases.set(label.area, absAddr - label.offset)
+      }
+    }
+
+    // Fallback: use segment base from .noi (e.g. s__DATA for .area _DATA)
+    for (const label of labels) {
+      if (areaBases.has(label.area)) continue
+      const segBase = noiSymbols.raw.get(`s_${label.area}`)
+      if (segBase !== undefined) {
+        areaBases.set(label.area, segBase)
       }
     }
 

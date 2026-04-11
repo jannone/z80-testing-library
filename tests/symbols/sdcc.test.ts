@@ -118,4 +118,37 @@ describe('SdccSymbolProvider', () => {
     unlinkSync(noiPath)
     unlinkSync(resolve(TMP_DIR, 'static.lst'))
   })
+
+  it('resolves static data variables using segment base from .noi', () => {
+    // .noi has an exported CODE symbol and the DATA segment base, but no exported DATA labels
+    const noiPath = writeTmpFile('data.noi', [
+      'DEF _exported_func 0x4100',
+      'DEF s__DATA 0xC000',
+    ].join('\n'))
+
+    const lstContent = [
+      '                              1\t.area _CODE',
+      '   00000000  1\t_exported_func::',
+      '   00000010  2\t_static_helper:',
+      '                              3\t.area _DATA',
+      '   00000000  4\t_paddle_l_y:',
+      '   00000002  5\t_paddle_r_y:',
+      '   00000004  6\t_ball_x:',
+    ].join('\n')
+    writeTmpFile('data.lst', lstContent)
+
+    const provider = new SdccSymbolProvider(noiPath, TMP_DIR)
+
+    // CODE symbols still resolve via exported anchor
+    expect(provider.resolve('static_helper')).toBe(0x4110)
+
+    // DATA symbols resolve via s__DATA segment base
+    expect(provider.has('paddle_l_y')).toBe(true)
+    expect(provider.resolve('paddle_l_y')).toBe(0xC000)
+    expect(provider.resolve('paddle_r_y')).toBe(0xC002)
+    expect(provider.resolve('ball_x')).toBe(0xC004)
+
+    unlinkSync(noiPath)
+    unlinkSync(resolve(TMP_DIR, 'data.lst'))
+  })
 })
