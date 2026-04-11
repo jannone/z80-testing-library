@@ -1,6 +1,8 @@
 # z80-testing-library
 
-Headless unit testing library for MSX programs compiled with SDCC. Loads your ROM and symbols into a Z80 emulator, runs individual C functions, and lets you assert on registers, memory, and VDP state.
+Headless unit testing library for Z80 programs. Loads your ROM and symbols into a Z80 emulator, runs individual functions, and lets you assert on registers, memory, and peripheral state.
+
+Built with a **ports & adapters** architecture — the core is platform-agnostic, and platform-specific behavior (MSX, ColecoVision, ZX Spectrum, etc.) is provided through pluggable adapters.
 
 ## Install
 
@@ -8,56 +10,89 @@ Headless unit testing library for MSX programs compiled with SDCC. Loads your RO
 npm install z80-testing-library
 ```
 
-## Quick Start
+## Quick Start (MSX)
 
 Build your MSX project with SDCC (producing a `.rom` and `.noi` file), then write tests with any test runner (vitest, jest, mocha, etc.):
 
 ```typescript
-import { MsxMachine } from 'z80-testing-library'
+import { createMsxTestbed, loadRom } from 'z80-testing-library'
 
-const m = new MsxMachine({
-  romPath: 'path/to/game.rom',
+const { machine: m, vdp, keyboard } = createMsxTestbed({
+  rom: loadRom('path/to/game.rom'),
   symbolsPath: 'path/to/game.noi',
 })
 
 // Call a function by symbol name
-m.regs.a = 42                     // set up argument (sdcccall convention)
-m.runFunction('my_function')       // run until RET
-expect(m.regs.a).toBe(expectedResult)  // check return value
+m.regs.a = 42                          // set up argument (sdcccall convention)
+m.runFunction('my_function')            // run until RET
+expect(m.regs.a).toBe(expectedResult)   // check return value
+```
+
+## Quick Start (Bare Z80)
+
+For platform-independent Z80 testing (no MSX assumptions):
+
+```typescript
+import { Z80TestMachine } from 'z80-testing-library'
+
+const m = new Z80TestMachine({
+  regions: [[0x100, myCode]],   // load code at address 0x100
+})
+m.runFrom(0x100)
+expect(m.regs.a).toBe(42)
 ```
 
 ## Architecture
 
 ```
-z80-testing-library/
-  src/
-    machine.ts        Z80Machine — generic Z80 emulator wrapper
-    msx.ts            MsxMachine — extends Z80Machine with MSX memory map,
-                      BIOS stubs, VDP, and keyboard simulation
-    symbols.ts        Parses SDCC .noi symbol files
-    static-symbols.ts Resolves static (non-exported) symbols from .lst files
-    vdp-capture.ts    VDP port capture with 16KB VRAM buffer
-    utils.ts          Helpers: pushStackArg, signed8
+src/
+  core/
+    types.ts              Port interfaces: MemoryMap, Hardware, SymbolProvider
+    machine.ts            Z80TestMachine — platform-agnostic Z80 execution core
+  devices/
+    tms9918.ts            TMS9918 VDP capture (MSX, ColecoVision, SG-1000)
+  symbols/
+    sdcc.ts               SDCC .noi/.lst symbol parsing + SdccSymbolProvider
+  adapters/
+    msx/                  MSX adapter: memory map, BIOS hooks, factory
+  utils.ts                Helpers: pushStackArg, signed8, loadRom
 ```
 
 ### How It Works
 
-1. `MsxMachine` loads your ROM at `0x4000` (MSX cartridge slot 1) and parses the `.noi` file for symbol addresses.
-2. All MSX BIOS entry points (DISSCR, WRTVDP, LDIRVM, SNSMAT, etc.) are patched with `RET` so BIOS calls return immediately. Key BIOS routines (WRTVRM, LDIRVM, FILVRM, SNSMAT) have hooks that emulate their behavior.
-3. A `HALT` instruction at address `0x0000` acts as a sentinel — `runFunction()` pushes `0x0000` as the return address, so when the function executes `RET`, the CPU halts.
-4. A configurable cycle limit (default 100,000 T-states) prevents infinite loops.
+```
+User Tests (driving adapter)
+        │
+  ┌─────▼──────────────────────────────┐
+  │     Z80TestMachine  (core)         │
+  │  execution · memory · registers    │
+  ├────────────────────────────────────┤
+  │     Secondary Ports (interfaces)   │
+  │  MemoryMap · Hardware · Symbols    │
+  └──┬──────────┬──────────┬───────────┘
+     │          │          │
+  ┌──▼───┐  ┌──▼───┐  ┌───▼────────┐
+  │ MSX  │  │ Bare │  │ future ... │
+  └──────┘  └──────┘  └────────────┘
+```
+
+1. **Z80TestMachine** is the core — it runs Z80 code, manages memory and registers, and delegates hardware I/O to injected ports.
+2. **Adapters** (like `createMsxTestbed()`) compose the core with platform-specific `MemoryMap`, `Hardware`, and `SymbolProvider` implementations.
+3. **Devices** (like `Tms9918`) are reusable peripheral emulations shared across adapters.
+4. A `HALT` instruction at address `0x0000` acts as a sentinel — `runFunction()` pushes `0x0000` as the return address, so when the function executes `RET`, the CPU halts.
+5. A configurable cycle limit (default 100,000 T-states) prevents infinite loops.
 
 ## API Reference
 
-### MsxMachine
+### createMsxTestbed()
 
-The main class for testing MSX programs. Extends `Z80Machine` with MSX-specific hardware emulation.
+Factory function that creates an MSX testing environment with VDP capture, keyboard simulation, and BIOS hooks.
 
 ```typescript
-import { MsxMachine } from 'z80-testing-library'
+import { createMsxTestbed, loadRom } from 'z80-testing-library'
 
-const m = new MsxMachine({
-  romPath: 'game.rom',           // path to ROM file
+const { machine, vdp, keyboard } = createMsxTestbed({
+  rom: loadRom('game.rom'),      // ROM data as Uint8Array
   symbolsPath: 'game.noi',      // SDCC .noi symbol file
   romLoadAddress: 0x4000,        // default: 0x4000 (slot 1)
   stackPointer: 0xF380,          // default: 0xF380
@@ -66,14 +101,39 @@ const m = new MsxMachine({
 })
 ```
 
+Returns `{ machine, vdp, keyboard }`:
+- **machine** — `Z80TestMachine` instance with MSX memory map and hardware
+- **vdp** — `Tms9918` instance for VDP/VRAM inspection
+- **keyboard** — `Uint8Array(16)` for keyboard matrix simulation
+
+### Z80TestMachine
+
+The platform-agnostic core. Used directly for bare Z80 testing, or via an adapter for platform-specific testing.
+
+```typescript
+import { Z80TestMachine } from 'z80-testing-library'
+
+const m = new Z80TestMachine({
+  memoryMap: myMemoryMap,        // MemoryMap port (write protection, defaults)
+  hardware: myHardware,          // Hardware port (I/O, hooks, stubs)
+  symbols: mySymbolProvider,     // SymbolProvider port (name → address)
+  rom: myRomData,                // ROM as Uint8Array
+  romLoadAddress: 0x4000,        // where to load ROM
+  regions: [[0x100, myCode]],    // additional memory regions
+  stackPointer: 0xF000,          // initial stack pointer
+  hooks: new Map([[0x100, (m) => { ... }]]),  // user PC-triggered hooks
+  stubs: [0x0050],               // additional stub addresses
+})
+```
+
+All config fields are optional — with no arguments you get a flat 64KB all-writable Z80.
+
 #### Symbol Access
 
 | Method | Description |
 |---|---|
 | `sym(name)` | Look up a symbol address by name. Throws if not found. |
 | `hasSym(name)` | Check if a symbol exists. Returns boolean. |
-| `staticSym(name)` | Look up a static (non-exported) symbol. Requires `lstDir`. |
-| `hasStaticSym(name)` | Check if a static symbol exists. |
 
 #### Execution
 
@@ -105,56 +165,88 @@ m.regs.ix   // index registers: ix, iy
 | `writeWord(addr, val)` | Write a little-endian 16-bit word. |
 | `writeBlock(addr, data)` | Write a `Uint8Array` or `number[]` to memory. |
 
-#### VDP
+### Port Interfaces
 
-Access the VDP capture via `m.vdp`:
+Implement these to add support for a new Z80 platform:
 
 ```typescript
-m.vdp.readVram(addr)                 // read from 16KB VRAM buffer
-m.vdp.writeVram(addr, value)         // write to VRAM buffer
-m.vdp.fillVram(addr, value, len)     // fill VRAM region
-m.vdp.readSatEntry(index)            // read sprite attribute: { y, x, pattern, color }
-m.vdp.readPntTile(col, row)          // read Pattern Name Table tile
-m.vdp.getRegisterWrites()            // recorded VDP register writes
-m.vdp.getVramWrites()                // recorded data port writes
-m.vdp.clear()                        // clear recorded writes (keep VRAM)
-m.vdp.clearAll()                     // clear everything including VRAM
+import type { MemoryMap, Hardware, SymbolProvider } from 'z80-testing-library'
+
+// Memory layout — defines address space characteristics
+const myMemoryMap: MemoryMap = {
+  defaultRomLoadAddress: 0x4000,
+  defaultStackPointer: 0xF380,
+  isWritable: (addr) => addr >= 0xC000,
+}
+
+// Hardware — I/O ports and OS/BIOS interception
+const myHardware: Hardware = {
+  readPort: (port) => 0xFF,
+  writePort: (port, value) => {},
+  hooks: new Map(),    // PC-triggered hooks for BIOS/OS calls
+  stubs: [0x0041],     // addresses to patch with RET
+}
+
+// Symbols — name-to-address resolution
+const mySymbols: SymbolProvider = {
+  resolve: (name) => symbolTable.get(name),
+  has: (name) => symbolTable.has(name),
+}
 ```
 
-#### Keyboard
+### Tms9918 (VDP)
 
-Simulate keyboard input via the MSX keyboard matrix:
+TMS9918 video display processor capture. Used by MSX, ColecoVision, SG-1000, and other systems with this VDP.
 
 ```typescript
-// Rows 0-15, each byte is active-low (0 = pressed, 1 = released)
-m.keyboardRows[row] = 0xFF            // all released
-m.keyboardRows[row] = 0xFF & ~(1 << bit)  // press a key
+import { Tms9918, TMS9918_LAYOUT } from 'z80-testing-library'
 
-// The SNSMAT BIOS hook reads from keyboardRows automatically
+const vdp = new Tms9918()
+
+vdp.readVram(addr)                 // read from 16KB VRAM buffer
+vdp.writeVram(addr, value)         // write to VRAM buffer
+vdp.fillVram(addr, value, len)     // fill VRAM region
+vdp.readSatEntry(index)            // read sprite attribute: { y, x, pattern, color }
+vdp.readPntTile(col, row)          // read Pattern Name Table tile
+vdp.getRegisterWrites()            // recorded VDP register writes
+vdp.getVramWrites()                // recorded data port writes
+vdp.clear()                        // clear recorded writes (keep VRAM)
+vdp.clearAll()                     // clear everything including VRAM
 ```
 
-### Z80Machine
+### SdccSymbolProvider
 
-Lower-level class for generic Z80 testing (no MSX assumptions). Use this if your program isn't MSX-specific or you need full control over the hardware abstraction.
+Symbol resolution for programs compiled with SDCC. Parses `.noi` files for exported symbols and optionally `.lst` files for static (non-exported) symbols.
 
 ```typescript
-import { Z80Machine } from 'z80-testing-library'
+import { SdccSymbolProvider } from 'z80-testing-library'
 
-const m = new Z80Machine({
-  regions: [[0x100, myCode]],              // load code at address 0x100
-  stubs: [0x0041, 0x0047],                 // place RET at these addresses
-  stackPointer: 0xF000,
-  isWritable: (addr) => addr >= 0xC000,    // ROM/RAM split
-  onPortRead: (port) => 0xFF,              // I/O port handlers
-  onPortWrite: (port, value) => {},
-  hooks: new Map([[0x100, (m) => { ... }]]),  // PC-triggered hooks
-})
+const symbols = new SdccSymbolProvider('game.noi', './build')
+symbols.resolve('my_function')    // → 0x4030
+symbols.resolve('static_helper')  // → 0x4120 (from .lst files)
+symbols.has('my_function')        // → true
+```
+
+You can also use the lower-level parsing functions directly:
+
+```typescript
+import { parseNoi, parseStaticSymbols } from 'z80-testing-library'
+
+const symbols = parseNoi('game.noi')
+symbols.clean.get('my_function')   // → 0x4030
+symbols.raw.get('_my_function')    // → 0x4030
+
+const statics = parseStaticSymbols('./build', symbols)
+statics.get('local_helper')        // → 0x4120
 ```
 
 ### Utility Functions
 
 ```typescript
-import { pushStackArg, signed8 } from 'z80-testing-library'
+import { pushStackArg, signed8, loadRom } from 'z80-testing-library'
+
+// Load a ROM file as Uint8Array
+const rom = loadRom('game.rom')
 
 // Push a byte onto the stack (for SDCC multi-arg calling conventions)
 pushStackArg(m, 0x42)
@@ -164,40 +256,25 @@ signed8(0xFE)  // → -2
 signed8(127)   // → 127
 ```
 
-### Symbol Parsing
-
-```typescript
-import { parseNoi, parseStaticSymbols } from 'z80-testing-library'
-
-// Parse .noi file (generated by SDCC linker)
-const symbols = parseNoi('game.noi')
-symbols.clean.get('my_function')   // → 0x4030
-symbols.raw.get('_my_function')    // → 0x4030
-
-// Parse static symbols from .lst files
-const statics = parseStaticSymbols('./build', symbols)
-statics.get('local_helper')        // → 0x4120
-```
-
 ### Constants
 
 ```typescript
-import { MSX_BIOS, VDP_LAYOUT } from 'z80-testing-library'
+import { MSX_BIOS, TMS9918_LAYOUT } from 'z80-testing-library'
 
 MSX_BIOS.SNSMAT   // 0x0141
 MSX_BIOS.WRTVDP   // 0x0047
 // ... DISSCR, ENASCR, WRTVRM, RDVRM, FILVRM, LDIRVM, CHGCLR, INIGRP
 
-VDP_LAYOUT.SAT     // 0x1B00 (Sprite Attribute Table)
-VDP_LAYOUT.PNT     // 0x1800 (Pattern Name Table)
-VDP_LAYOUT.PGT     // 0x0000 (Pattern Generator Table)
-VDP_LAYOUT.CT      // 0x2000 (Color Table)
-VDP_LAYOUT.SPT     // 0x3800 (Sprite Pattern Table)
+TMS9918_LAYOUT.SAT     // 0x1B00 (Sprite Attribute Table)
+TMS9918_LAYOUT.PNT     // 0x1800 (Pattern Name Table)
+TMS9918_LAYOUT.PGT     // 0x0000 (Pattern Generator Table)
+TMS9918_LAYOUT.CT      // 0x2000 (Color Table)
+TMS9918_LAYOUT.SPT     // 0x3800 (Sprite Pattern Table)
 ```
 
 ## SDCC Calling Conventions
 
-The library is designed for ROMs compiled with SDCC. Understanding the calling conventions is essential for setting up function arguments and reading return values.
+The MSX adapter is designed for ROMs compiled with SDCC. Understanding the calling conventions is essential for setting up function arguments and reading return values.
 
 ### `__sdcccall(1)` (default)
 
@@ -227,7 +304,7 @@ m.runFunction('update_entity')
 
 ### `__sdcccall(0)` (BIOS wrappers)
 
-All parameters on the stack. Used for BIOS wrapper functions. These are stubbed in `MsxMachine`, so you rarely need to call them directly.
+All parameters on the stack. Used for BIOS wrapper functions. These are stubbed in the MSX adapter, so you rarely need to call them directly.
 
 ### Pushing Stack Arguments
 
@@ -276,7 +353,7 @@ Define read/write helpers for your game's struct layouts:
 ```typescript
 const OBJ_SIZE = 15
 
-function writeObj(m: MsxMachine, index: number, fields: Partial<{
+function writeObj(m: Z80TestMachine, index: number, fields: Partial<{
   active: number, x: number, y: number, dir: number, hp: number
 }>) {
   const base = m.sym('objs') + index * OBJ_SIZE
@@ -295,51 +372,49 @@ it('processes knockback', () => {
 })
 ```
 
-### Testing Keyboard Input
+### Testing Keyboard Input (MSX)
 
 ```typescript
 // MSX keyboard row 8 contains arrow keys (active-low):
 // bit 7=Right, 6=Down, 5=Up, 4=Left, 0=Space
 
 it('reads right arrow press', () => {
-  m.keyboardRows[8] = 0xFF & ~(1 << 7) // Right pressed
+  keyboard[8] = 0xFF & ~(1 << 7) // Right pressed
   m.runFunction('read_input')
   expect(m.readByte(m.sym('inputDir'))).toBe(0x01) // DIR_RIGHT
 })
 ```
 
-### Testing VDP/Sprite Output
+### Testing VDP/Sprite Output (MSX)
 
 ```typescript
 it('updates sprite position in SAT', () => {
   writeObj(m, 0, { x: 0x80, y: 0x60 })
   m.runFunction('update_sprites')
 
-  const sprite = m.vdp.readSatEntry(0)
+  const sprite = vdp.readSatEntry(0)
   expect(sprite.x).toBe(0x80)
   expect(sprite.y).toBe(0x60 - 1) // VDP Y is off by 1
 })
 ```
 
-### Testing Tile Map Operations
+### Testing Tile Map Operations (MSX)
 
 ```typescript
 it('places wall tiles', () => {
-  // Fill tilemap with floor
   const addr = m.sym('tileMap')
   for (let i = 0; i < 22 * 32; i++) m.writeByte(addr + i, 0x26)
 
   m.regs.a = 0  // room_id
   m.runFunction('build_room_tilemap')
 
-  // Check that walls were placed at expected positions
   expect(m.readByte(addr + 0 * 32 + 15)).toBe(0x90) // TILE_WALL
 })
 ```
 
 ## MSX Memory Map
 
-MsxMachine enforces the standard MSX memory layout:
+The MSX adapter enforces the standard MSX memory layout:
 
 | Range | Contents | Writable |
 |---|---|---|
@@ -347,7 +422,7 @@ MsxMachine enforces the standard MSX memory layout:
 | `0x4000-0xBFFF` | ROM (your cartridge) | No |
 | `0xC000-0xFFFF` | RAM (variables, stack) | Yes |
 
-## VDP Layout (SCREEN 2)
+## TMS9918 VRAM Layout (Graphics II / SCREEN 2)
 
 | Region | Address | Size | Description |
 |---|---|---|---|
@@ -357,11 +432,42 @@ MsxMachine enforces the standard MSX memory layout:
 | CT | `0x2000` | 6144 | Color Table |
 | SPT | `0x3800` | 2048 | Sprite Pattern Table |
 
+## Adding a New Platform
+
+To support a new Z80 computer, implement the three port interfaces and write a factory function:
+
+```typescript
+// adapters/spectrum/index.ts
+import { Z80TestMachine } from 'z80-testing-library'
+import type { MemoryMap, Hardware } from 'z80-testing-library'
+
+const spectrumMemoryMap: MemoryMap = {
+  defaultRomLoadAddress: 0x8000,
+  defaultStackPointer: 0xFF00,
+  isWritable: (addr) => addr >= 0x4000,  // 16K ROM at 0x0000-0x3FFF
+}
+
+const spectrumHardware: Hardware = {
+  readPort: (port) => { /* ULA, etc. */ return 0xFF },
+  writePort: (port, value) => { /* ULA, etc. */ },
+  hooks: new Map(),
+  stubs: [],
+}
+
+export function createSpectrumTestbed(config) {
+  return new Z80TestMachine({
+    memoryMap: spectrumMemoryMap,
+    hardware: spectrumHardware,
+    ...config,
+  })
+}
+```
+
 ## Tips and Gotchas
 
 1. **RAM is uninitialized.** The machine starts with zeros in RAM. Always initialize the globals your function depends on.
 
-2. **BIOS calls are partially emulated.** SNSMAT, WRTVRM, LDIRVM, and FILVRM have functional hooks. Other BIOS calls are stubbed with `RET` (no-op). The function's logic still executes — only the actual hardware I/O is skipped.
+2. **BIOS calls are partially emulated (MSX).** SNSMAT, WRTVRM, LDIRVM, and FILVRM have functional hooks. Other BIOS calls are stubbed with `RET` (no-op). The function's logic still executes — only the actual hardware I/O is skipped.
 
 3. **Signed bytes.** When reading Z80 memory values that represent `int8_t`, use `signed8()`:
    ```typescript
@@ -369,14 +475,16 @@ MsxMachine enforces the standard MSX memory layout:
    const offset = signed8(m.readByte(addr))  // -128..127
    ```
 
-4. **ROM is read-only.** Writes to `0x4000-0xBFFF` are silently dropped.
+4. **ROM is read-only (MSX).** Writes to `0x4000-0xBFFF` are silently dropped.
 
-5. **Stack location.** SP starts at `0xF380`. Keep object data away from the stack region (`0xF000-0xF380`) to avoid corruption in deeply nested calls.
+5. **Stack location (MSX).** SP starts at `0xF380`. Keep object data away from the stack region (`0xF000-0xF380`) to avoid corruption in deeply nested calls.
 
 6. **Cycle limits.** Default is 100,000 T-states. Pass a higher limit for complex functions:
    ```typescript
    m.runFunction('build_room_tilemap', 500_000)
    ```
+
+7. **No file I/O in the core.** The `Z80TestMachine` accepts `Uint8Array` for ROM data, not file paths. Use `loadRom()` to read from disk, or provide data directly for browser-compatible usage.
 
 ## License
 
