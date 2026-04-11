@@ -209,6 +209,25 @@ describe('SdccSymbolProvider', () => {
     expect(ordered[1]).toBe('content_aaa')
   })
 
+  it('parseLk strips directory prefixes from .rel paths', () => {
+    const lkContent = [
+      '-mjwx',
+      '-i dist/game.ihx',
+      'dist/pong.rel',
+      'dist/intro.rel',
+      '-e',
+    ].join('\n')
+
+    const ordered = SdccSymbolProvider.parseLk(lkContent, {
+      pong: 'content_pong',
+      intro: 'content_intro',
+    })
+
+    expect(ordered).toHaveLength(2)
+    expect(ordered[0]).toBe('content_pong')
+    expect(ordered[1]).toBe('content_intro')
+  })
+
   it('fromFiles reads .lst files in link order from .lk file', () => {
     // Two files: alphabetical order is [aaa.lst, bbb.lst]
     // but link order in .lk is [bbb.rel, aaa.rel]

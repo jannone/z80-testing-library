@@ -1,5 +1,5 @@
 import { readFileSync, readdirSync, existsSync } from 'fs'
-import { resolve, dirname } from 'path'
+import { resolve, basename } from 'path'
 import type { SymbolProvider } from '../core/types.js'
 
 export interface SymbolMap {
@@ -183,7 +183,7 @@ export class SdccSymbolProvider implements SymbolProvider {
       .split('\n')
       .map(line => line.trim().match(/^(\S+)\.rel\s*$/))
       .filter((m): m is RegExpMatchArray => m !== null)
-      .map(m => m[1])
+      .map(m => basename(m[1]))
       .filter(name => name in lstContents)
       .map(name => lstContents[name]) as OrderedLstContents
   }
