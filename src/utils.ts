@@ -1,4 +1,3 @@
-import { readFileSync } from 'fs'
 import type { MachineInterface } from './core/types.js'
 
 /**
@@ -20,10 +19,4 @@ export function pushStackArg(m: MachineInterface, value: number): void {
  */
 export function signed8(val: number): number {
   return val > 127 ? val - 256 : val
-}
-
-/** Load a binary file as a Uint8Array suitable for passing as ROM data */
-export function loadRom(path: string): Uint8Array {
-  const buf = readFileSync(path)
-  return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength)
 }

@@ -1,5 +1,5 @@
 import { Z80TestMachine, type Z80TestMachineConfig } from '../../core/machine.js'
-import type { PcHook, MemoryRegion } from '../../core/types.js'
+import type { PcHook, MemoryRegion, SymbolProvider } from '../../core/types.js'
 import { Tms9918 } from '../../devices/tms9918.js'
 import { SdccSymbolProvider } from '../../symbols/sdcc.js'
 import { msxMemoryMap } from './memory-map.js'
@@ -14,6 +14,9 @@ export interface MsxTestbedConfig {
 
   /** ROM load address (default: 0x4000 for MSX cartridge slot 1) */
   romLoadAddress?: number
+
+  /** Pre-built symbol provider (takes precedence over symbolsPath/lstDir) */
+  symbols?: SymbolProvider
 
   /** Path to SDCC .noi symbol file */
   symbolsPath?: string
@@ -46,9 +49,10 @@ export function createMsxTestbed(config: MsxTestbedConfig = {}): MsxTestbed {
 
   const hardware = createMsxHardware(vdp, keyboard)
 
-  const symbols = config.symbolsPath
-    ? new SdccSymbolProvider(config.symbolsPath, config.lstDir)
-    : undefined
+  const symbols = config.symbols
+    ?? (config.symbolsPath
+      ? SdccSymbolProvider.fromFiles(config.symbolsPath, config.lstDir)
+      : undefined)
 
   const machine = new Z80TestMachine({
     memoryMap: msxMemoryMap,
