@@ -27,9 +27,6 @@ export {
 // Symbols
 export {
   SdccSymbolProvider,
-  parseNoi,
-  parseStaticSymbols,
-  type SymbolMap,
 } from './symbols/sdcc.js'
 
 // Adapters — MSX
@@ -45,5 +42,4 @@ export {
 export {
   pushStackArg,
   signed8,
-  loadRom,
 } from './utils.js'

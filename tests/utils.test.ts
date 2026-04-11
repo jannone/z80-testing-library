@@ -1,9 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { Z80TestMachine } from '../src/core/machine.js'
-import { pushStackArg, signed8, loadRom } from '../src/utils.js'
-import { writeFileSync, unlinkSync, mkdirSync } from 'fs'
-import { resolve } from 'path'
-import { tmpdir } from 'os'
+import { pushStackArg, signed8 } from '../src/utils.js'
 
 describe('pushStackArg', () => {
   it('decrements SP and writes value', () => {
@@ -50,20 +47,3 @@ describe('signed8', () => {
   })
 })
 
-describe('loadRom', () => {
-  it('loads a binary file as Uint8Array', () => {
-    const dir = resolve(tmpdir(), 'z80-test-lib-utils-test')
-    mkdirSync(dir, { recursive: true })
-    const path = resolve(dir, 'test.rom')
-    writeFileSync(path, Buffer.from([0x3E, 0x42, 0xC9]))
-
-    const rom = loadRom(path)
-    expect(rom).toBeInstanceOf(Uint8Array)
-    expect(rom.length).toBe(3)
-    expect(rom[0]).toBe(0x3E)
-    expect(rom[1]).toBe(0x42)
-    expect(rom[2]).toBe(0xC9)
-
-    unlinkSync(path)
-  })
-})

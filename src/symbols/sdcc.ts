@@ -10,11 +10,10 @@ export interface SymbolMap {
 }
 
 /**
- * Parse an SDCC .noi file into symbol maps.
+ * Parse SDCC .noi content into symbol maps.
  * Format: `DEF _symbolName 0xABCD` (one per line)
  */
-export function parseNoi(path: string): SymbolMap {
-  const content = readFileSync(path, 'utf-8')
+export function parseNoi(content: string): SymbolMap {
   const raw = new Map<string, number>()
   const clean = new Map<string, number>()
 
@@ -33,10 +32,10 @@ export function parseNoi(path: string): SymbolMap {
 }
 
 /**
- * Parse SDCC .lst files to resolve static (non-exported) function addresses.
+ * Parse SDCC .lst file contents to resolve static (non-exported) function addresses.
  *
  * Strategy:
- * 1. For each .lst file, collect all labels grouped by their .area section.
+ * 1. For each .lst content, collect all labels grouped by their .area section.
  * 2. For each area, find an exported label that exists in the .noi symbols.
  * 3. Compute area base = noi_absolute_addr - lst_local_offset.
  * 4. For areas with no exported anchor, fall back to the segment base
@@ -44,18 +43,12 @@ export function parseNoi(path: string): SymbolMap {
  * 5. Resolve static labels in the same area using that base.
  */
 export function parseStaticSymbols(
-  lstDir: string,
+  lstContents: string[],
   noiSymbols: SymbolMap,
 ): Map<string, number> {
   const result = new Map<string, number>()
 
-  const lstFiles = readdirSync(lstDir)
-    .filter((f: string) => f.endsWith('.lst'))
-    .map((f: string) => resolve(lstDir, f))
-
-  for (const lstPath of lstFiles) {
-    const content = readFileSync(lstPath, 'utf-8')
-
+  for (const content of lstContents) {
     interface LabelInfo {
       name: string
       offset: number
@@ -127,11 +120,22 @@ export class SdccSymbolProvider implements SymbolProvider {
   private noiSymbols: SymbolMap
   private staticSymbols: Map<string, number> | null
 
-  constructor(noiPath: string, lstDir?: string) {
-    this.noiSymbols = parseNoi(noiPath)
-    this.staticSymbols = lstDir
-      ? parseStaticSymbols(lstDir, this.noiSymbols)
+  constructor(noiContent: string, lstContents?: string[]) {
+    this.noiSymbols = parseNoi(noiContent)
+    this.staticSymbols = lstContents
+      ? parseStaticSymbols(lstContents, this.noiSymbols)
       : null
+  }
+
+  /** Create from file paths (convenience for loading from disk) */
+  static fromFiles(noiPath: string, lstDir?: string): SdccSymbolProvider {
+    const noiContent = readFileSync(noiPath, 'utf-8')
+    const lstContents = lstDir
+      ? readdirSync(lstDir)
+          .filter((f: string) => f.endsWith('.lst'))
+          .map((f: string) => readFileSync(resolve(lstDir, f), 'utf-8'))
+      : undefined
+    return new SdccSymbolProvider(noiContent, lstContents)
   }
 
   resolve(name: string): number | undefined {
