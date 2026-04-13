@@ -51,6 +51,7 @@ export {
 } from './callc.js'
 
 export {
+  sdcccall0,
   sdcccall1,
   resolveArg,
   type CallingConvention,
