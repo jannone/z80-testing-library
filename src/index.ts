@@ -39,6 +39,27 @@ export {
   type MsxTestbed,
 } from './adapters/msx/index.js'
 
+// Calling conventions
+export {
+  callC,
+  defC,
+  type CallCOptions,
+  type CallCResult,
+  type DefCOptions,
+  type CSignature,
+  type BoundCFunction,
+} from './callc.js'
+
+export {
+  sdcccall0,
+  sdcccall1,
+  resolveArg,
+  type CallingConvention,
+  type ArgValue,
+  type ArgType,
+  type RetType,
+} from './calling-convention/index.js'
+
 // Utilities
 export {
   pushStackArg,
