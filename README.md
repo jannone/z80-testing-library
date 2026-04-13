@@ -16,17 +16,21 @@ Build your MSX project with SDCC (producing a `.rom` and `.noi` file), then writ
 
 ```typescript
 import { readFileSync } from 'fs'
-import { createMsxTestbed } from 'z80-testing-library'
+import { createMsxTestbed, callC } from 'z80-testing-library'
 
 const { machine: m, vdp, keyboard } = createMsxTestbed({
   rom: new Uint8Array(readFileSync('path/to/game.rom')),
   symbolsPath: 'path/to/game.noi',
 })
 
-// Call a function by symbol name
-m.regs.a = 42                          // set up argument (sdcccall convention)
-m.runFunction('my_function')            // run until RET
-expect(m.regs.a).toBe(expectedResult)   // check return value
+// Call a C function — arguments and return value handled automatically
+const result = callC(m, 'my_function', { args: [42], ret: 'u8' })
+expect(result.value).toBe(expectedResult)
+
+// Or use the low-level API for full register control
+m.regs.a = 42
+m.runFunction('my_function')
+expect(m.regs.a).toBe(expectedResult)
 ```
 
 ## Quick Start (Bare Z80)
@@ -50,12 +54,16 @@ src/
   core/
     types.ts              Port interfaces: MemoryMap, Hardware, SymbolProvider
     machine.ts            Z80TestMachine — platform-agnostic Z80 execution core
+  calling-convention/
+    types.ts              CallingConvention interface and argument types
+    sdcccall1.ts          SDCC __sdcccall(1) convention implementation
   devices/
     tms9918.ts            TMS9918 VDP capture (MSX, ColecoVision, SG-1000)
   symbols/
     sdcc.ts               SDCC .noi/.lst symbol parsing + SdccSymbolProvider
   adapters/
     msx/                  MSX adapter: memory map, BIOS hooks, factory
+  callc.ts                High-level C function caller
   utils.ts                Helpers: pushStackArg, signed8
 ```
 
@@ -246,12 +254,70 @@ symbols.resolve('clamp_position')  // → 0x4018 (static function, from .lst)
 symbols.has('game_loop')           // → true
 ```
 
+### callC()
+
+High-level helper for calling C functions. Handles argument placement and return value extraction according to a pluggable calling convention (default: SDCC `__sdcccall(1)`).
+
+```typescript
+import { callC } from 'z80-testing-library'
+
+// uint8_t add_offset(uint8_t val)
+const result = callC(m, 'add_offset', { args: [10], ret: 'u8' })
+expect(result.value).toBe(15)
+
+// void set_rect(uint8_t col, uint8_t row, uint8_t w, uint8_t h)
+callC(m, 'set_rect', { args: [5, 3, 3, 4] })
+
+// uint16_t get_address(uint16_t *ptr)
+const r = callC(m, 'get_address', {
+  args: [{ type: 'u16', value: 0xC100 }],
+  ret: 'u16',
+})
+```
+
+**Arguments:** Bare numbers are treated as `u8`. For 16-bit values, use `{ type: 'u16', value }`.
+
+**Return value:** Specify `ret` as `'void'` (default), `'u8'`, or `'u16'`.
+
+**Result object:** `{ value, tStates }` — the return value and the number of T-states consumed.
+
+#### Options
+
+| Option | Default | Description |
+|---|---|---|
+| `args` | `[]` | Function arguments |
+| `ret` | `'void'` | Return type: `'void'`, `'u8'`, `'u16'` |
+| `cc` | `sdcccall1()` | Calling convention to use |
+| `cycleLimit` | `100000` | Maximum T-states before aborting |
+
+#### Custom Calling Conventions
+
+To support a different compiler, implement the `CallingConvention` interface:
+
+```typescript
+import type { CallingConvention } from 'z80-testing-library'
+
+const myConvention: CallingConvention = {
+  placeArgs(m, args) {
+    // Place arguments into registers and/or stack
+    // e.g. Hitech-C: all args on stack, right-to-left
+  },
+  readReturn(m, ret) {
+    // Read return value from registers
+    // e.g. Hitech-C: u8 from L, u16 from HL
+    return ret === 'u8' ? m.regs.l : m.regs.hl
+  },
+}
+
+callC(m, 'my_func', { args: [1, 2], ret: 'u8', cc: myConvention })
+```
+
 ### Utility Functions
 
 ```typescript
 import { pushStackArg, signed8 } from 'z80-testing-library'
 
-// Push a byte onto the stack (for SDCC multi-arg calling conventions)
+// Push a byte onto the stack (for manual argument placement)
 pushStackArg(m, 0x42)
 
 // Convert unsigned byte to signed int8
@@ -277,7 +343,7 @@ TMS9918_LAYOUT.SPT     // 0x3800 (Sprite Pattern Table)
 
 ## SDCC Calling Conventions
 
-The MSX adapter is designed for ROMs compiled with SDCC. Understanding the calling conventions is essential for setting up function arguments and reading return values.
+The MSX adapter is designed for ROMs compiled with SDCC. The `callC()` helper handles calling conventions automatically, but understanding the register assignments is useful for debugging and for the low-level API.
 
 ### `__sdcccall(1)` (default)
 
@@ -290,6 +356,25 @@ This is the default convention for SDCC 4.x targeting Z80:
 | Second `uint8_t` (if first was uint8) | Stack at SP+2 |
 | Return `uint8_t` | Register **A** |
 | Return `uint16_t` / pointer | Register pair **DE** |
+
+Using `callC()`, you don't need to manage this yourself:
+
+```typescript
+import { callC } from 'z80-testing-library'
+
+// uint8_t add_offset(uint8_t val)
+const result = callC(m, 'add_offset', { args: [10], ret: 'u8' })
+
+// void update_entity(Entity *e, uint8_t flags)
+callC(m, 'update_entity', {
+  args: [{ type: 'u16', value: entityAddr }, 0x01],
+})
+
+// void set_rect(uint8_t col, uint8_t row, uint8_t w, uint8_t h)
+callC(m, 'set_rect', { args: [5, 3, 3, 4] })
+```
+
+The equivalent low-level API requires manual register/stack management:
 
 ```typescript
 // uint8_t add_offset(uint8_t val)
@@ -309,9 +394,9 @@ m.runFunction('update_entity')
 
 All parameters on the stack. Used for BIOS wrapper functions. These are stubbed in the MSX adapter, so you rarely need to call them directly.
 
-### Pushing Stack Arguments
+### Pushing Stack Arguments (low-level)
 
-For multi-argument functions where args go on the stack, push in reverse order:
+When using the low-level API for multi-argument functions, push stack args in reverse order:
 
 ```typescript
 import { pushStackArg } from 'z80-testing-library'
@@ -330,6 +415,13 @@ m.runFunction('set_rect')
 ### Testing a Pure Function
 
 ```typescript
+// Using callC
+it('converts direction to index', () => {
+  const r = callC(m, 'dir_to_index', { args: [0x04], ret: 'u8' }) // DIR_DOWN
+  expect(r.value).toBe(0)
+})
+
+// Using the low-level API
 it('converts direction to index', () => {
   m.regs.a = 0x04 // DIR_DOWN
   m.runFunction('dir_to_index')
@@ -342,9 +434,9 @@ it('converts direction to index', () => {
 ```typescript
 it('advances the RNG state', () => {
   m.writeByte(m.sym('rng'), 42)
-  m.runFunction('next_rng')
+  const r = callC(m, 'next_rng', { ret: 'u8' })
   const expected = (42 * 109 + 31) & 0xFF
-  expect(m.regs.a).toBe(expected)
+  expect(r.value).toBe(expected)
   expect(m.readByte(m.sym('rng'))).toBe(expected)
 })
 ```
@@ -369,8 +461,9 @@ function writeObj(m: Z80TestMachine, index: number, fields: Partial<{
 
 it('processes knockback', () => {
   writeObj(m, 0, { active: 1, x: 0x80, y: 0x80 })
-  m.regs.de = m.sym('objs')  // pointer arg in DE
-  m.runFunction('process_knockback')
+  callC(m, 'process_knockback', {
+    args: [{ type: 'u16', value: m.sym('objs') }],  // pointer arg
+  })
   expect(m.readByte(m.sym('objs') + 2)).not.toBe(0x80) // x changed
 })
 ```
