@@ -42,8 +42,12 @@ export {
 // Calling conventions
 export {
   callC,
+  defC,
   type CallCOptions,
   type CallCResult,
+  type DefCOptions,
+  type CSignature,
+  type BoundCFunction,
 } from './callc.js'
 
 export {
