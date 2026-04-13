@@ -404,27 +404,25 @@ TMS9918_LAYOUT.CT      // 0x2000 (Color Table)
 TMS9918_LAYOUT.SPT     // 0x3800 (Sprite Pattern Table)
 ```
 
-## SDCC Calling Conventions
+## Calling Conventions
 
-The MSX adapter is designed for ROMs compiled with SDCC. The `callC()` helper handles calling conventions automatically, but understanding the register assignments is useful for debugging and for the low-level API.
+The library ships with two SDCC calling conventions. `defC` and `callC` handle the details automatically — you just need to pick the right one.
 
-### `__sdcccall(1)` (default)
+### Built-in conventions
 
-This is the default convention for SDCC 4.x targeting Z80:
+| Convention | Import | Args | Return u8 | Return u16 |
+|---|---|---|---|---|
+| `sdcccall1()` | default | 1st u8 → **A**, 1st u16 → **DE**, rest → stack (R→L) | **A** | **DE** |
+| `sdcccall0()` | `{ sdcccall0 }` | All → stack (R→L) | **L** | **HL** |
 
-| Argument | Placement |
-|---|---|
-| First `uint8_t` | Register **A** |
-| First `uint16_t` / pointer | Register pair **DE** |
-| Second `uint8_t` (if first was uint8) | Stack at SP+2 |
-| Return `uint8_t` | Register **A** |
-| Return `uint16_t` / pointer | Register pair **DE** |
+### `sdcccall1()` — SDCC default
 
-Using `defC`, you don't need to manage this yourself:
+The default convention for SDCC 4.x targeting Z80. Used automatically by `defC` and `callC` unless overridden.
 
 ```typescript
 import { defC } from 'z80-testing-library'
 
+// No cc option needed — sdcccall1 is the default
 const addOffset = defC('add_offset', ['u8'], 'u8')(m)
 const updateEntity = defC('update_entity', ['u16', 'u8'], 'void')(m)
 const setRect = defC('set_rect', ['u8', 'u8', 'u8', 'u8'], 'void')(m)
@@ -434,39 +432,60 @@ updateEntity(entityAddr, 0x01)
 setRect(5, 3, 3, 4)
 ```
 
-The equivalent low-level API requires manual register/stack management:
-
-```typescript
-// uint8_t add_offset(uint8_t val)
-m.regs.a = 10
-m.runFunction('add_offset')
-const result = m.regs.a
-
-// void update_entity(Entity *e, uint8_t flags)
-m.regs.de = entityAddr     // pointer in DE
-// 2nd arg placement depends on types — check your .asm output
-m.runFunction('update_entity')
-```
+Register assignment (left-to-right): first `uint8_t` → A, first `uint16_t`/pointer → DE. Remaining arguments go to the stack in reverse order.
 
 > **Tip:** For functions with 2+ args where the first is a pointer, check the generated assembly to confirm where SDCC places the second argument. It may be in A or on the stack.
 
-### `__sdcccall(0)` (BIOS wrappers)
+### `sdcccall0()` — BIOS wrappers
 
-All parameters on the stack. Used for BIOS wrapper functions. These are stubbed in the MSX adapter, so you rarely need to call them directly.
+All parameters on the stack. Used by SDCC for BIOS wrapper functions and older code using `__sdcccall(0)`.
 
-### Pushing Stack Arguments (low-level)
+```typescript
+import { defC, sdcccall0 } from 'z80-testing-library'
 
-When using the low-level API for multi-argument functions, push stack args in reverse order:
+const cc = sdcccall0()
+const biosRead = defC('bios_read_sector', ['u8', 'u16'], 'u8', { cc })(m)
+expect(biosRead(0x01, 0x1800)).toBe(expectedResult)
+```
+
+### Custom conventions
+
+To support a different compiler (Hitech-C, z88dk, etc.), implement the `CallingConvention` interface:
+
+```typescript
+import type { CallingConvention } from 'z80-testing-library'
+
+const hitechC: CallingConvention = {
+  placeArgs(m, args) {
+    // Hitech-C: all args on stack, right-to-left
+  },
+  readReturn(m, ret) {
+    // Hitech-C: u8 from L, u16 from HL
+    return ret === 'u8' ? m.regs.l : m.regs.hl
+  },
+}
+
+const myFunc = defC('my_func', ['u8', 'u8'], 'u8', { cc: hitechC })(m)
+```
+
+### Low-level register/stack management
+
+When using `runFunction` directly, you manage calling conventions manually:
 
 ```typescript
 import { pushStackArg } from 'z80-testing-library'
 
-// void set_rect(uint8_t col, uint8_t row, uint8_t w, uint8_t h)
-// sdcccall(1): col in A, row in L, w and h on stack
-m.regs.a = 5    // col
-m.regs.l = 3    // row
+// sdcccall(1): uint8_t add_offset(uint8_t val)
+m.regs.a = 10
+m.runFunction('add_offset')
+const result = m.regs.a
+
+// sdcccall(1): void set_rect(uint8_t col, uint8_t row, uint8_t w, uint8_t h)
+// col in A, row/w/h on stack (push in reverse order)
+m.regs.a = 5
 pushStackArg(m, 4) // h (pushed first = higher on stack)
-pushStackArg(m, 3) // w (pushed second = lower on stack, read first)
+pushStackArg(m, 3) // w
+pushStackArg(m, 3) // row (pushed last = lower on stack, read first)
 m.runFunction('set_rect')
 ```
 
