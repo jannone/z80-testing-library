@@ -83,12 +83,15 @@ User Tests (driving adapter)
   │  execution · memory · registers    │
   ├────────────────────────────────────┤
   │     Secondary Ports (interfaces)   │
-  │  MemoryMap · Hardware · Symbols    │
-  └──┬──────────┬──────────┬───────────┘
-     │          │          │
-  ┌──▼───┐  ┌──▼───┐  ┌───▼────────┐
+  │  MemoryMap · Hardware              │
+  └──┬──────────┬──────────────────────┘
+     │          │
+  ┌──▼───┐  ┌──▼───┐  ┌────────────┐
   │ MSX  │  │ Bare │  │ future ... │
   └──────┘  └──────┘  └────────────┘
+
+  Symbols (SdccSymbols, etc.) are managed independently
+  and passed to ffi.def / ffi.call for name → address resolution.
 ```
 
 1. **Z80TestMachine** is the core — it runs Z80 code, manages memory and registers, and delegates hardware I/O to injected ports.
@@ -177,7 +180,7 @@ m.regs.ix   // index registers: ix, iy
 Implement these to add support for a new Z80 platform:
 
 ```typescript
-import type { MemoryMap, Hardware, Symbols } from 'z80-testing-library'
+import type { MemoryMap, Hardware } from 'z80-testing-library'
 
 // Memory layout — defines address space characteristics
 const myMemoryMap: MemoryMap = {
@@ -193,8 +196,15 @@ const myHardware: Hardware = {
   hooks: new Map(),    // PC-triggered hooks for BIOS/OS calls
   stubs: [0x0041],     // addresses to patch with RET
 }
+```
 
-// Symbols — name-to-address resolution
+### Symbols Interface
+
+The `Symbols` interface is independent of the machine — implement it for custom symbol sources:
+
+```typescript
+import type { Symbols } from 'z80-testing-library'
+
 const mySymbols: Symbols = {
   query: (name) => symbolTable.get(name),
   get: (name) => {
@@ -604,7 +614,7 @@ The MSX adapter enforces the standard MSX memory layout:
 
 ## Adding a New Platform
 
-To support a new Z80 computer, implement the three port interfaces and write a factory function:
+To support a new Z80 computer, implement the two port interfaces and write a factory function:
 
 ```typescript
 // adapters/spectrum/index.ts
