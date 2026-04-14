@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { Z80TestMachine } from '../src/core/machine.js'
-import { callC, defC } from '../src/callc.js'
+import { ffi } from '../src/ffi.js'
 import { sdcccall1 } from '../src/calling-convention/sdcccall1.js'
 
 const CODE_BASE = 0x100
@@ -29,14 +29,14 @@ function createMachineWithFunctions(
   }
 }
 
-describe('callC', () => {
+describe('ffi.call', () => {
   describe('no arguments', () => {
     it('calls a void function with no args', () => {
       // LD A, 42 ; RET
       const { m, addr } = createMachineWithFunctions({
         no_args: new Uint8Array([0x3E, 42, 0xC9]),
       })
-      const result = callC(m, addr.no_args)
+      const result = ffi.call(m, addr.no_args)
       expect(result.value).toBe(0)
       expect(result.tStates).toBeGreaterThan(0)
     })
@@ -48,7 +48,7 @@ describe('callC', () => {
       const { m, addr } = createMachineWithFunctions({
         get99: new Uint8Array([0x3E, 99, 0xC9]),
       })
-      const result = callC(m, addr.get99, { ret: 'u8' })
+      const result = ffi.call(m, addr.get99, { ret: 'u8' })
       expect(result.value).toBe(99)
     })
   })
@@ -59,7 +59,7 @@ describe('callC', () => {
       const { m, addr } = createMachineWithFunctions({
         get_addr: new Uint8Array([0x11, 0x34, 0x12, 0xC9]),
       })
-      const result = callC(m, addr.get_addr, { ret: 'u16' })
+      const result = ffi.call(m, addr.get_addr, { ret: 'u16' })
       expect(result.value).toBe(0x1234)
     })
   })
@@ -70,7 +70,7 @@ describe('callC', () => {
       const { m, addr } = createMachineWithFunctions({
         inc: new Uint8Array([0x3C, 0xC9]),
       })
-      const result = callC(m, addr.inc, { args: [10], ret: 'u8' })
+      const result = ffi.call(m, addr.inc, { args: [10], ret: 'u8' })
       expect(result.value).toBe(11)
     })
 
@@ -79,7 +79,7 @@ describe('callC', () => {
       const { m, addr } = createMachineWithFunctions({
         inc: new Uint8Array([0x3C, 0xC9]),
       })
-      const result = callC(m, addr.inc, { args: [0xFF], ret: 'u8' })
+      const result = ffi.call(m, addr.inc, { args: [0xFF], ret: 'u8' })
       expect(result.value).toBe(0) // wraps around
     })
   })
@@ -90,7 +90,7 @@ describe('callC', () => {
       const { m, addr } = createMachineWithFunctions({
         high_byte: new Uint8Array([0x7A, 0xC9]),
       })
-      const result = callC(m, addr.high_byte, {
+      const result = ffi.call(m, addr.high_byte, {
         args: [{ type: 'u16', value: 0xAB00 }],
         ret: 'u8',
       })
@@ -104,7 +104,7 @@ describe('callC', () => {
       const { m, addr } = createMachineWithFunctions({
         add_ae: new Uint8Array([0x83, 0xC9]),
       })
-      const result = callC(m, addr.add_ae, {
+      const result = ffi.call(m, addr.add_ae, {
         args: [10, { type: 'u16', value: 0x0005 }],
         ret: 'u8',
       })
@@ -116,7 +116,7 @@ describe('callC', () => {
       const { m, addr } = createMachineWithFunctions({
         add_ae: new Uint8Array([0x83, 0xC9]),
       })
-      const result = callC(m, addr.add_ae, {
+      const result = ffi.call(m, addr.add_ae, {
         args: [{ type: 'u16', value: 0x0003 }, 10],
         ret: 'u8',
       })
@@ -133,7 +133,7 @@ describe('callC', () => {
       const { m, addr } = createMachineWithFunctions({
         read_stack: new Uint8Array([0xE1, 0xC1, 0xE5, 0x79, 0xC9]),
       })
-      const result = callC(m, addr.read_stack, {
+      const result = ffi.call(m, addr.read_stack, {
         args: [1, 42],  // A=1 (register), 42 (stack)
         ret: 'u8',
       })
@@ -147,7 +147,7 @@ describe('callC', () => {
       const { m, addr } = createMachineWithFunctions({
         inc: new Uint8Array([0x3C, 0xC9]),
       })
-      const result = callC(m, addr.inc, {
+      const result = ffi.call(m, addr.inc, {
         args: [{ type: 'u8', value: 5 }],
         ret: 'u8',
       })
@@ -162,7 +162,7 @@ describe('callC', () => {
       const { m, addr } = createMachineWithFunctions({
         f: new Uint8Array([0x3E, 77, 0xC9]),
       })
-      const result = callC(m, addr.f, { ret: 'u8', cc })
+      const result = ffi.call(m, addr.f, { ret: 'u8', cc })
       expect(result.value).toBe(77)
     })
   })
@@ -173,7 +173,7 @@ describe('callC', () => {
       const { m, addr } = createMachineWithFunctions({
         nops: new Uint8Array([0x00, 0x00, 0xC9]),
       })
-      const result = callC(m, addr.nops)
+      const result = ffi.call(m, addr.nops)
       expect(result.tStates).toBeGreaterThan(0)
     })
   })
@@ -185,7 +185,7 @@ describe('sdcccall1 placeArgs edge cases', () => {
       nop: new Uint8Array([0x00, 0xC9]),
     })
     m.regs.a = 0xEE
-    callC(m, addr.nop)
+    ffi.call(m, addr.nop)
     // A was not overwritten by placeArgs (no args to place)
   })
 
@@ -203,7 +203,7 @@ describe('sdcccall1 placeArgs edge cases', () => {
         0xC9,             // RET
       ]),
     })
-    const result = callC(m, addr.add_stack, {
+    const result = ffi.call(m, addr.add_stack, {
       args: [99, 10, 20],  // A=99 (register), stack: 10, 20
       ret: 'u8',
     })
@@ -211,14 +211,14 @@ describe('sdcccall1 placeArgs edge cases', () => {
   })
 })
 
-describe('defC', () => {
+describe('ffi.def', () => {
   describe('signature and binding', () => {
     it('defines a signature and binds to a machine', () => {
       // INC A ; RET
       const { m, addr } = createMachineWithFunctions({
         inc: new Uint8Array([0x3C, 0xC9]),
       })
-      const inc = defC(addr.inc, ['u8'], 'u8')
+      const inc = ffi.def(addr.inc, ['u8'], 'u8')
       const bound = inc(m)
       expect(bound(10)).toBe(11)
     })
@@ -228,7 +228,7 @@ describe('defC', () => {
       const { m, addr } = createMachineWithFunctions({
         inc: new Uint8Array([0x3C, 0xC9]),
       })
-      const inc = defC(addr.inc, ['u8'], 'u8')(m)
+      const inc = ffi.def(addr.inc, ['u8'], 'u8')(m)
       expect(inc(10)).toBe(11)
     })
   })
@@ -239,7 +239,7 @@ describe('defC', () => {
       const { m, addr } = createMachineWithFunctions({
         get99: new Uint8Array([0x3E, 99, 0xC9]),
       })
-      const get99 = defC(addr.get99, [], 'u8')(m)
+      const get99 = ffi.def(addr.get99, [], 'u8')(m)
       expect(get99()).toBe(99)
     })
 
@@ -248,7 +248,7 @@ describe('defC', () => {
       const { m, addr } = createMachineWithFunctions({
         get_addr: new Uint8Array([0x11, 0x34, 0x12, 0xC9]),
       })
-      const getAddr = defC(addr.get_addr, [], 'u16')(m)
+      const getAddr = ffi.def(addr.get_addr, [], 'u16')(m)
       expect(getAddr()).toBe(0x1234)
     })
 
@@ -257,7 +257,7 @@ describe('defC', () => {
       const { m, addr } = createMachineWithFunctions({
         nop: new Uint8Array([0x00, 0xC9]),
       })
-      const nop = defC(addr.nop, [], 'void')(m)
+      const nop = ffi.def(addr.nop, [], 'void')(m)
       expect(nop()).toBeUndefined()
     })
   })
@@ -268,7 +268,7 @@ describe('defC', () => {
       const { m, addr } = createMachineWithFunctions({
         inc: new Uint8Array([0x3C, 0xC9]),
       })
-      const inc = defC(addr.inc, ['u8'], 'u8')(m)
+      const inc = ffi.def(addr.inc, ['u8'], 'u8')(m)
       expect(inc(0xFF)).toBe(0) // wraps
     })
 
@@ -277,7 +277,7 @@ describe('defC', () => {
       const { m, addr } = createMachineWithFunctions({
         high_byte: new Uint8Array([0x7A, 0xC9]),
       })
-      const highByte = defC(addr.high_byte, ['u16'], 'u8')(m)
+      const highByte = ffi.def(addr.high_byte, ['u16'], 'u8')(m)
       expect(highByte(0xAB00)).toBe(0xAB)
     })
 
@@ -286,7 +286,7 @@ describe('defC', () => {
       const { m, addr } = createMachineWithFunctions({
         add_ae: new Uint8Array([0x83, 0xC9]),
       })
-      const addAE = defC(addr.add_ae, ['u8', 'u16'], 'u8')(m)
+      const addAE = ffi.def(addr.add_ae, ['u8', 'u16'], 'u8')(m)
       // A=10 (first u8), DE=0x0005 (first u16), result = 10+5
       expect(addAE(10, 0x0005)).toBe(15)
     })
@@ -296,7 +296,7 @@ describe('defC', () => {
       const { m, addr } = createMachineWithFunctions({
         read_stack: new Uint8Array([0xE1, 0xC1, 0xE5, 0x79, 0xC9]),
       })
-      const readStack = defC(addr.read_stack, ['u8', 'u8'], 'u8')(m)
+      const readStack = ffi.def(addr.read_stack, ['u8', 'u8'], 'u8')(m)
       expect(readStack(1, 42)).toBe(42)
     })
   })
@@ -307,7 +307,7 @@ describe('defC', () => {
       const { m, addr } = createMachineWithFunctions({
         get99: new Uint8Array([0x3E, 99, 0xC9]),
       })
-      const get99 = defC(addr.get99, [], 'u8')(m)
+      const get99 = ffi.def(addr.get99, [], 'u8')(m)
       const result = get99.detailed()
       expect(result.value).toBe(99)
       expect(result.tStates).toBeGreaterThan(0)
@@ -318,7 +318,7 @@ describe('defC', () => {
       const { m, addr } = createMachineWithFunctions({
         nops: new Uint8Array([0x00, 0x00, 0xC9]),
       })
-      const nops = defC(addr.nops, [], 'void')(m)
+      const nops = ffi.def(addr.nops, [], 'void')(m)
       const result = nops.detailed()
       expect(result.value).toBe(0)
       expect(result.tStates).toBeGreaterThan(0)
@@ -335,7 +335,7 @@ describe('defC', () => {
         inc: new Uint8Array([0x3C, 0x3C, 0xC9]),
       })
 
-      const inc = defC(addr1.inc, ['u8'], 'u8')
+      const inc = ffi.def(addr1.inc, ['u8'], 'u8')
       expect(inc(m1)(10)).toBe(11)
       expect(inc(m2)(10)).toBe(12)
     })
@@ -347,7 +347,7 @@ describe('defC', () => {
       const { m, addr } = createMachineWithFunctions({
         f: new Uint8Array([0x3E, 77, 0xC9]),
       })
-      const f = defC(addr.f, [], 'u8', { cc: sdcccall1() })(m)
+      const f = ffi.def(addr.f, [], 'u8', { cc: sdcccall1() })(m)
       expect(f()).toBe(77)
     })
   })
@@ -358,7 +358,7 @@ describe('defC', () => {
       const { m, addr } = createMachineWithFunctions({
         get42: new Uint8Array([0x3E, 42, 0xC9]),
       })
-      const get42 = defC(addr.get42, [], 'u8')(m)
+      const get42 = ffi.def(addr.get42, [], 'u8')(m)
       expect(get42()).toBe(42)
     })
   })

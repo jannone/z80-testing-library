@@ -39,16 +39,15 @@ export {
   type MsxTestbed,
 } from './adapters/msx/index.js'
 
-// Calling conventions
+// FFI — foreign function interface
 export {
-  callC,
-  defC,
-  type CallCOptions,
-  type CallCResult,
-  type DefCOptions,
-  type CSignature,
-  type BoundCFunction,
-} from './callc.js'
+  ffi,
+  type CallOptions,
+  type CallResult,
+  type DefOptions,
+  type FnSchema,
+  type BoundFunction,
+} from './ffi.js'
 
 export {
   sdcccall0,

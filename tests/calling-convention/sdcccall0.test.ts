@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { Z80TestMachine } from '../../src/core/machine.js'
-import { callC } from '../../src/callc.js'
+import { ffi } from '../../src/ffi.js'
 import { sdcccall0 } from '../../src/calling-convention/sdcccall0.js'
 
 const CODE_BASE = 0x100
@@ -32,7 +32,7 @@ describe('sdcccall0', () => {
       const { m, addr } = createMachineWithFunctions({
         get99: new Uint8Array([0x2E, 99, 0xC9]),
       })
-      const result = callC(m, addr.get99, { ret: 'u8', cc })
+      const result = ffi.call(m, addr.get99, { ret: 'u8', cc })
       expect(result.value).toBe(99)
     })
 
@@ -41,7 +41,7 @@ describe('sdcccall0', () => {
       const { m, addr } = createMachineWithFunctions({
         get_addr: new Uint8Array([0x21, 0x34, 0x12, 0xC9]),
       })
-      const result = callC(m, addr.get_addr, { ret: 'u16', cc })
+      const result = ffi.call(m, addr.get_addr, { ret: 'u16', cc })
       expect(result.value).toBe(0x1234)
     })
 
@@ -50,7 +50,7 @@ describe('sdcccall0', () => {
       const { m, addr } = createMachineWithFunctions({
         nop: new Uint8Array([0x00, 0xC9]),
       })
-      const result = callC(m, addr.nop, { cc })
+      const result = ffi.call(m, addr.nop, { cc })
       expect(result.value).toBe(0)
     })
   })
@@ -68,7 +68,7 @@ describe('sdcccall0', () => {
         ]),
       })
       m.regs.a = 0xFF // should NOT be used as the arg
-      const result = callC(m, addr.read_arg, { args: [42], ret: 'u8', cc })
+      const result = ffi.call(m, addr.read_arg, { args: [42], ret: 'u8', cc })
       expect(result.value).toBe(42)
     })
 
@@ -86,7 +86,7 @@ describe('sdcccall0', () => {
           0xC9,             // RET
         ]),
       })
-      const result = callC(m, addr.read_u16, {
+      const result = ffi.call(m, addr.read_u16, {
         args: [{ type: 'u16', value: 0xABCD }],
         ret: 'u16',
         cc,
@@ -109,7 +109,7 @@ describe('sdcccall0', () => {
           0xC9,             // RET
         ]),
       })
-      const result = callC(m, addr.add, { args: [10, 20], ret: 'u8', cc })
+      const result = ffi.call(m, addr.add, { args: [10, 20], ret: 'u8', cc })
       expect(result.value).toBe(30)
     })
 
@@ -131,7 +131,7 @@ describe('sdcccall0', () => {
           0xC9,             // RET
         ]),
       })
-      const result = callC(m, addr.mix, {
+      const result = ffi.call(m, addr.mix, {
         args: [5, { type: 'u16', value: 0x0010 }],
         ret: 'u8',
         cc,
@@ -140,14 +140,13 @@ describe('sdcccall0', () => {
     })
   })
 
-  describe('works with defC', () => {
-    it('binds with custom cc option', async () => {
-      const { defC } = await import('../../src/callc.js')
+  describe('works with ffi.def', () => {
+    it('binds with custom cc option', () => {
       // LD L, 77 ; RET
       const { m, addr } = createMachineWithFunctions({
         get77: new Uint8Array([0x2E, 77, 0xC9]),
       })
-      const get77 = defC(addr.get77, [], 'u8', { cc })(m)
+      const get77 = ffi.def(addr.get77, [], 'u8', { cc })(m)
       expect(get77()).toBe(77)
     })
   })

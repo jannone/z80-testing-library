@@ -16,21 +16,20 @@ Build your MSX project with SDCC (producing a `.rom` and `.noi` file), then writ
 
 ```typescript
 import { readFileSync } from 'fs'
-import { createMsxTestbed, SdccSymbols, defC } from 'z80-testing-library'
+import { createMsxTestbed, SdccSymbols, ffi } from 'z80-testing-library'
 
 const symbols = SdccSymbols.fromFiles('path/to/game.noi', 'path/to/build')
 const { machine: m, vdp, keyboard } = createMsxTestbed({
   rom: new Uint8Array(readFileSync('path/to/game.rom')),
 })
 
-// Define a C function binding — signature declared once, fully typed
-const myFunctionSchema = defC(symbols.get('my_function'), ['u8'], 'u8')
+// Define a function binding — signature declared once, fully typed
+const myFunctionSchema = ffi.def(symbols.get('my_function'), ['u8'], 'u8')
 const myFunction = myFunctionSchema(m)
 expect(myFunction(42)).toBe(expectedResult)
 
-// Or use callC for one-off calls without pre-declaring the signature
-import { callC } from 'z80-testing-library'
-const result = callC(m, symbols.get('my_function'), { args: [42], ret: 'u8' })
+// Or use ffi.call for one-off calls without pre-declaring the signature
+const result = ffi.call(m, symbols.get('my_function'), { args: [42], ret: 'u8' })
 expect(result.value).toBe(expectedResult)
 
 // Or use the low-level API for full register control
@@ -70,7 +69,7 @@ src/
     sdcc.ts               SDCC .noi/.lst symbol parsing + SdccSymbols
   adapters/
     msx/                  MSX adapter: memory map, BIOS hooks, factory
-  callc.ts                High-level C function caller
+  ffi.ts                  Foreign function interface (def + call)
   utils.ts                Helpers: pushStackArg, signed8
 ```
 
@@ -251,19 +250,19 @@ symbols.query('clamp_position')    // → 0x4018 (static function, from .lst)
 symbols.has('game_loop')           // → true
 ```
 
-### defC()
+### ffi.def()
 
-Declarative C function binding. Define the signature once, bind to a machine, and get a fully typed callable. This is the recommended way to test C functions.
+Declarative function binding. Define the signature once, bind to a machine, and get a fully typed callable. This is the recommended way to test compiled functions.
 
 ```typescript
-import { defC, SdccSymbols } from 'z80-testing-library'
+import { ffi, SdccSymbols } from 'z80-testing-library'
 
 const symbols = SdccSymbols.fromFiles('build/game.noi', './build')
 
 // Define schemas — reusable, no machine dependency
-const paddleHeightSchema = defC(symbols.get('paddle_height'), ['u8'], 'u8')
-const setRectSchema = defC(symbols.get('set_rect'), ['u8', 'u8', 'u8', 'u8'], 'void')
-const getEntitySchema = defC(symbols.get('get_entity'), ['u16'], 'u16')
+const paddleHeightSchema = ffi.def(symbols.get('paddle_height'), ['u8'], 'u8')
+const setRectSchema = ffi.def(symbols.get('set_rect'), ['u8', 'u8', 'u8', 'u8'], 'void')
+const getEntitySchema = ffi.def(symbols.get('get_entity'), ['u16'], 'u16')
 
 // Bind to a machine — typically in beforeEach or describe scope
 const paddleHeight = paddleHeightSchema(m)
@@ -275,7 +274,7 @@ expect(paddleHeight(1)).toBe(24)
 setRect(5, 3, 3, 4)
 
 // Inline binding when reuse isn't needed
-const rng = defC(symbols.get('next_rng'), [], 'u8')(m)
+const rng = ffi.def(symbols.get('next_rng'), [], 'u8')(m)
 expect(rng()).toBeGreaterThan(0)
 ```
 
@@ -294,8 +293,8 @@ const result = paddleHeight.detailed(0)  // → { value: 16, tStates: 234 }
 ```typescript
 // test/helpers/game-functions.ts
 const symbols = SdccSymbols.fromFiles('build/game.noi', './build')
-export const paddleHeightSchema = defC(symbols.get('paddle_height'), ['u8'], 'u8')
-export const setRectSchema = defC(symbols.get('set_rect'), ['u8', 'u8', 'u8', 'u8'], 'void')
+export const paddleHeightSchema = ffi.def(symbols.get('paddle_height'), ['u8'], 'u8')
+export const setRectSchema = ffi.def(symbols.get('set_rect'), ['u8', 'u8', 'u8', 'u8'], 'void')
 
 // test/paddle.test.ts
 import { paddleHeightSchema } from './helpers/game-functions'
@@ -310,22 +309,22 @@ expect(paddleHeight(0)).toBe(16)
 | `cc` | `sdcccall1()` | Calling convention to use |
 | `cycleLimit` | `100000` | Maximum T-states before aborting |
 
-### callC()
+### ffi.call()
 
-Imperative helper for one-off C function calls. Useful when you don't need to pre-declare a signature.
+Imperative helper for one-off function calls. Useful when you don't need to pre-declare a signature.
 
 ```typescript
-import { callC } from 'z80-testing-library'
+import { ffi } from 'z80-testing-library'
 
 // uint8_t add_offset(uint8_t val)
-const result = callC(m, symbols.get('add_offset'), { args: [10], ret: 'u8' })
+const result = ffi.call(m, symbols.get('add_offset'), { args: [10], ret: 'u8' })
 expect(result.value).toBe(15)
 
 // void set_rect(uint8_t col, uint8_t row, uint8_t w, uint8_t h)
-callC(m, symbols.get('set_rect'), { args: [5, 3, 3, 4] })
+ffi.call(m, symbols.get('set_rect'), { args: [5, 3, 3, 4] })
 
 // uint16_t get_address(uint16_t *ptr)
-const r = callC(m, symbols.get('get_address'), {
+const r = ffi.call(m, symbols.get('get_address'), {
   args: [{ type: 'u16', value: 0xC100 }],
   ret: 'u16',
 })
@@ -346,7 +345,7 @@ const r = callC(m, symbols.get('get_address'), {
 
 #### Custom Calling Conventions
 
-Both `defC` and `callC` accept a custom calling convention via the `cc` option. Implement the `CallingConvention` interface to support a different compiler:
+Both `ffi.def` and `ffi.call` accept a custom calling convention via the `cc` option. Implement the `CallingConvention` interface to support a different compiler:
 
 ```typescript
 import type { CallingConvention } from 'z80-testing-library'
@@ -363,11 +362,11 @@ const myConvention: CallingConvention = {
   },
 }
 
-// With defC
-const myFuncSchema = defC(symbols.get('my_func'), ['u8', 'u8'], 'u8', { cc: myConvention })
+// With ffi.def
+const myFuncSchema = ffi.def(symbols.get('my_func'), ['u8', 'u8'], 'u8', { cc: myConvention })
 
-// With callC
-callC(m, symbols.get('my_func'), { args: [1, 2], ret: 'u8', cc: myConvention })
+// With ffi.call
+ffi.call(m, symbols.get('my_func'), { args: [1, 2], ret: 'u8', cc: myConvention })
 ```
 
 ### Utility Functions
@@ -401,7 +400,7 @@ TMS9918_LAYOUT.SPT     // 0x3800 (Sprite Pattern Table)
 
 ## Calling Conventions
 
-The library ships with two SDCC calling conventions. `defC` and `callC` handle the details automatically — you just need to pick the right one.
+The library ships with two SDCC calling conventions. `ffi.def` and `ffi.call` handle the details automatically — you just need to pick the right one.
 
 ### Built-in conventions
 
@@ -412,15 +411,15 @@ The library ships with two SDCC calling conventions. `defC` and `callC` handle t
 
 ### `sdcccall1()` — SDCC default
 
-The default convention for SDCC 4.x targeting Z80. Used automatically by `defC` and `callC` unless overridden.
+The default convention for SDCC 4.x targeting Z80. Used automatically by `ffi.def` and `ffi.call` unless overridden.
 
 ```typescript
-import { defC } from 'z80-testing-library'
+import { ffi } from 'z80-testing-library'
 
 // No cc option needed — sdcccall1 is the default
-const addOffset = defC(symbols.get('add_offset'), ['u8'], 'u8')(m)
-const updateEntity = defC(symbols.get('update_entity'), ['u16', 'u8'], 'void')(m)
-const setRect = defC(symbols.get('set_rect'), ['u8', 'u8', 'u8', 'u8'], 'void')(m)
+const addOffset = ffi.def(symbols.get('add_offset'), ['u8'], 'u8')(m)
+const updateEntity = ffi.def(symbols.get('update_entity'), ['u16', 'u8'], 'void')(m)
+const setRect = ffi.def(symbols.get('set_rect'), ['u8', 'u8', 'u8', 'u8'], 'void')(m)
 
 addOffset(10)
 updateEntity(entityAddr, 0x01)
@@ -436,10 +435,10 @@ Register assignment (left-to-right): first `uint8_t` → A, first `uint16_t`/poi
 All parameters on the stack. Used by SDCC for BIOS wrapper functions and older code using `__sdcccall(0)`.
 
 ```typescript
-import { defC, sdcccall0 } from 'z80-testing-library'
+import { ffi, sdcccall0 } from 'z80-testing-library'
 
 const cc = sdcccall0()
-const biosRead = defC(symbols.get('bios_read_sector'), ['u8', 'u16'], 'u8', { cc })(m)
+const biosRead = ffi.def(symbols.get('bios_read_sector'), ['u8', 'u16'], 'u8', { cc })(m)
 expect(biosRead(0x01, 0x1800)).toBe(expectedResult)
 ```
 
@@ -460,7 +459,7 @@ const hitechC: CallingConvention = {
   },
 }
 
-const myFunc = defC(symbols.get('my_func'), ['u8', 'u8'], 'u8', { cc: hitechC })(m)
+const myFunc = ffi.def(symbols.get('my_func'), ['u8', 'u8'], 'u8', { cc: hitechC })(m)
 ```
 
 ### Low-level register/stack management
@@ -489,8 +488,8 @@ m.runFrom(symbols.get('set_rect'))
 ### Testing a Pure Function
 
 ```typescript
-// Using defC (recommended)
-const dirToIndex = defC(symbols.get('dir_to_index'), ['u8'], 'u8')(m)
+// Using ffi.def (recommended)
+const dirToIndex = ffi.def(symbols.get('dir_to_index'), ['u8'], 'u8')(m)
 
 it('converts direction to index', () => {
   expect(dirToIndex(0x04)).toBe(0) // DIR_DOWN
@@ -507,7 +506,7 @@ it('converts direction to index', () => {
 ### Testing a Function That Reads/Writes Globals
 
 ```typescript
-const nextRng = defC(symbols.get('next_rng'), [], 'u8')(m)
+const nextRng = ffi.def(symbols.get('next_rng'), [], 'u8')(m)
 
 it('advances the RNG state', () => {
   m.writeByte(symbols.get('rng'), 42)
@@ -523,7 +522,7 @@ Define read/write helpers for your game's struct layouts:
 
 ```typescript
 const OBJ_SIZE = 15
-const processKnockback = defC(symbols.get('process_knockback'), ['u16'], 'void')(m)
+const processKnockback = ffi.def(symbols.get('process_knockback'), ['u16'], 'void')(m)
 
 function writeObj(m: Z80TestMachine, index: number, fields: Partial<{
   active: number, x: number, y: number, dir: number, hp: number
