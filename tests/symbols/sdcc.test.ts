@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { writeFileSync, mkdirSync, rmSync } from 'fs'
 import { resolve } from 'path'
 import { tmpdir } from 'os'
-import { parseNoi, parseStaticSymbols, SdccSymbolProvider, type OrderedLstContents } from '../../src/symbols/sdcc.js'
+import { parseNoi, parseStaticSymbols, SdccSymbols, type OrderedLstContents } from '../../src/symbols/sdcc.js'
 
 describe('parseNoi', () => {
   it('parses DEF lines into symbol maps', () => {
@@ -51,22 +51,22 @@ describe('parseNoi', () => {
   })
 })
 
-describe('SdccSymbolProvider', () => {
+describe('SdccSymbols', () => {
   it('implements SymbolProvider interface', () => {
     const noiContent = [
       'DEF _my_func 0x4030',
       'DEF _my_var 0xC000',
     ].join('\n')
 
-    const provider = new SdccSymbolProvider(noiContent)
+    const provider = new SdccSymbols(noiContent)
 
     expect(provider.has('my_func')).toBe(true)
     expect(provider.has('my_var')).toBe(true)
     expect(provider.has('nonexistent')).toBe(false)
 
-    expect(provider.resolve('my_func')).toBe(0x4030)
-    expect(provider.resolve('my_var')).toBe(0xC000)
-    expect(provider.resolve('nonexistent')).toBeUndefined()
+    expect(provider.query('my_func')).toBe(0x4030)
+    expect(provider.query('my_var')).toBe(0xC000)
+    expect(provider.query('nonexistent')).toBeUndefined()
   })
 
   it('resolves static symbols when lstContents is provided', () => {
@@ -79,13 +79,13 @@ describe('SdccSymbolProvider', () => {
     ].join('\n')
 
     const lkContent = 'test.rel\n'
-    const ordered = SdccSymbolProvider.parseLk(lkContent, { test: lstContent })
-    const provider = new SdccSymbolProvider(noiContent, ordered)
+    const ordered = SdccSymbols.parseLk(lkContent, { test: lstContent })
+    const provider = new SdccSymbols(noiContent, ordered)
 
     // exported_func is at offset 0 in _CODE, absolute 0x4100
     // static_helper is at offset 0x10, so absolute 0x4100 + 0x10 = 0x4110
     expect(provider.has('static_helper')).toBe(true)
-    expect(provider.resolve('static_helper')).toBe(0x4110)
+    expect(provider.query('static_helper')).toBe(0x4110)
   })
 
   it('resolves static data variables using segment base from .noi', () => {
@@ -109,17 +109,17 @@ describe('SdccSymbolProvider', () => {
     ].join('\n')
 
     const lkContent = 'test.rel\n'
-    const ordered = SdccSymbolProvider.parseLk(lkContent, { test: lstContent })
-    const provider = new SdccSymbolProvider(noiContent, ordered)
+    const ordered = SdccSymbols.parseLk(lkContent, { test: lstContent })
+    const provider = new SdccSymbols(noiContent, ordered)
 
     // CODE symbols still resolve via exported anchor
-    expect(provider.resolve('static_helper')).toBe(0x4110)
+    expect(provider.query('static_helper')).toBe(0x4110)
 
     // DATA symbols resolve via s__DATA segment base (single file, offset = 0)
     expect(provider.has('paddle_l_y')).toBe(true)
-    expect(provider.resolve('paddle_l_y')).toBe(0xC000)
-    expect(provider.resolve('paddle_r_y')).toBe(0xC002)
-    expect(provider.resolve('ball_x')).toBe(0xC004)
+    expect(provider.query('paddle_l_y')).toBe(0xC000)
+    expect(provider.query('paddle_r_y')).toBe(0xC002)
+    expect(provider.query('ball_x')).toBe(0xC004)
   })
 
   it('resolves static vars using cumulative offsets across multiple files', () => {
@@ -175,18 +175,18 @@ describe('SdccSymbolProvider', () => {
     ].join('\n')
 
     const lkContent = 'main.rel\nphysics.rel\nrender.rel\n'
-    const ordered = SdccSymbolProvider.parseLk(lkContent, {
+    const ordered = SdccSymbols.parseLk(lkContent, {
       main: mainLst,
       physics: physicsLst,
       render: renderLst,
     })
-    const provider = new SdccSymbolProvider(noiContent, ordered)
+    const provider = new SdccSymbols(noiContent, ordered)
 
     // Anchored symbols resolve correctly
-    expect(provider.resolve('collision_count')).toBe(0xC089) // 0xC085 + 4
+    expect(provider.query('collision_count')).toBe(0xC089) // 0xC085 + 4
 
     // sprite_count must use cumulative offset: s__INITIALIZED + 3 (main) + 5 (physics) = 0xC08A
-    expect(provider.resolve('sprite_count')).toBe(0xC08A)
+    expect(provider.query('sprite_count')).toBe(0xC08A)
   })
 
   it('parseLk orders lst contents by link order and skips missing entries', () => {
@@ -199,7 +199,7 @@ describe('SdccSymbolProvider', () => {
       '-e',
     ].join('\n')
 
-    const ordered = SdccSymbolProvider.parseLk(lkContent, {
+    const ordered = SdccSymbols.parseLk(lkContent, {
       aaa: 'content_aaa',
       bbb: 'content_bbb',
     })
@@ -218,7 +218,7 @@ describe('SdccSymbolProvider', () => {
       '-e',
     ].join('\n')
 
-    const ordered = SdccSymbolProvider.parseLk(lkContent, {
+    const ordered = SdccSymbols.parseLk(lkContent, {
       pong: 'content_pong',
       intro: 'content_intro',
     })
@@ -271,11 +271,11 @@ describe('SdccSymbolProvider', () => {
         '   00000000  4\t\t.ds 1',
       ].join('\n'))
 
-      const provider = SdccSymbolProvider.fromFiles(resolve(dir, 'game.noi'), dir)
+      const provider = SdccSymbols.fromFiles(resolve(dir, 'game.noi'), dir)
 
       // With correct link order [bbb, aaa]: my_static = 0xC000 + 4 = 0xC004
       // With wrong alphabetical order [aaa, bbb]: my_static = 0xC000 + 0 = 0xC000
-      expect(provider.resolve('my_static')).toBe(0xC004)
+      expect(provider.query('my_static')).toBe(0xC004)
     } finally {
       rmSync(dir, { recursive: true })
     }
@@ -310,12 +310,12 @@ describe('SdccSymbolProvider', () => {
     ].join('\n')
 
     const lkContent = 'a.rel\nb.rel\n'
-    const ordered = SdccSymbolProvider.parseLk(lkContent, { a: file1, b: file2 })
-    const provider = new SdccSymbolProvider(noiContent, ordered)
+    const ordered = SdccSymbols.parseLk(lkContent, { a: file1, b: file2 })
+    const provider = new SdccSymbols(noiContent, ordered)
 
     // file1 has no anchor: cumulative offset = 0, so base = 0xC000 + 0 = 0xC000
-    expect(provider.resolve('local_a')).toBe(0xC000)
+    expect(provider.query('local_a')).toBe(0xC000)
     // file2 has exported anchor _buf = 0xC010: anchor wins over fallback (0xC000 + 16 = 0xC010)
-    expect(provider.resolve('local_b')).toBe(0xC018)
+    expect(provider.query('local_b')).toBe(0xC018)
   })
 })

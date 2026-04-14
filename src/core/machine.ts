@@ -2,7 +2,6 @@ import { Z80, type Hal } from 'z80-emulator'
 import type {
   MemoryMap,
   Hardware,
-  SymbolProvider,
   PcHook,
   MemoryRegion,
   MachineInterface,
@@ -19,9 +18,6 @@ export interface Z80TestMachineConfig {
 
   /** Hardware peripherals — I/O ports, hooks, stubs */
   hardware?: Hardware
-
-  /** Symbol resolution provider */
-  symbols?: SymbolProvider
 
   /** ROM data to load into memory */
   rom?: Uint8Array
@@ -45,13 +41,11 @@ export interface Z80TestMachineConfig {
 export class Z80TestMachine implements MachineInterface {
   private memory: Uint8Array
   private cpu: Z80
-  private symbols: SymbolProvider | null
   private tStates = 0
   private mergedHooks: Map<number, PcHook>
 
   constructor(config: Z80TestMachineConfig = {}) {
     this.memory = new Uint8Array(65536)
-    this.symbols = config.symbols ?? null
 
     const memoryMap = config.memoryMap
     const hardware = config.hardware
@@ -113,25 +107,6 @@ export class Z80TestMachine implements MachineInterface {
       ?? 0xF380
   }
 
-  // ---- Symbol access ----
-
-  /** Look up a symbol address by name */
-  sym(name: string): number {
-    if (!this.symbols) {
-      throw new Error('No symbol provider configured')
-    }
-    const addr = this.symbols.resolve(name)
-    if (addr === undefined) {
-      throw new Error(`Unknown symbol: ${name}`)
-    }
-    return addr
-  }
-
-  /** Check if a symbol exists */
-  hasSym(name: string): boolean {
-    return this.symbols?.has(name) ?? false
-  }
-
   // ---- Register access ----
 
   get regs() {
@@ -166,14 +141,6 @@ export class Z80TestMachine implements MachineInterface {
   }
 
   // ---- Execution ----
-
-  /**
-   * Run a function by symbol name.
-   * Pushes sentinel return address, sets PC, runs until HALT or cycle limit.
-   */
-  runFunction(name: string, cycleLimit = DEFAULT_CYCLE_LIMIT): number {
-    return this.runFrom(this.sym(name), cycleLimit)
-  }
 
   /**
    * Run from a specific address.

@@ -16,25 +16,26 @@ Build your MSX project with SDCC (producing a `.rom` and `.noi` file), then writ
 
 ```typescript
 import { readFileSync } from 'fs'
-import { createMsxTestbed, defC } from 'z80-testing-library'
+import { createMsxTestbed, SdccSymbols, defC } from 'z80-testing-library'
 
+const symbols = SdccSymbols.fromFiles('path/to/game.noi', 'path/to/build')
 const { machine: m, vdp, keyboard } = createMsxTestbed({
   rom: new Uint8Array(readFileSync('path/to/game.rom')),
-  symbolsPath: 'path/to/game.noi',
 })
 
 // Define a C function binding — signature declared once, fully typed
-const myFunction = defC('my_function', ['u8'], 'u8')(m)
+const myFunctionSchema = defC(symbols.get('my_function'), ['u8'], 'u8')
+const myFunction = myFunctionSchema(m)
 expect(myFunction(42)).toBe(expectedResult)
 
 // Or use callC for one-off calls without pre-declaring the signature
 import { callC } from 'z80-testing-library'
-const result = callC(m, 'my_function', { args: [42], ret: 'u8' })
+const result = callC(m, symbols.get('my_function'), { args: [42], ret: 'u8' })
 expect(result.value).toBe(expectedResult)
 
 // Or use the low-level API for full register control
 m.regs.a = 42
-m.runFunction('my_function')
+m.runFrom(symbols.get('my_function'))
 expect(m.regs.a).toBe(expectedResult)
 ```
 
@@ -57,15 +58,16 @@ expect(m.regs.a).toBe(42)
 ```
 src/
   core/
-    types.ts              Port interfaces: MemoryMap, Hardware, SymbolProvider
+    types.ts              Port interfaces: MemoryMap, Hardware, Symbols
     machine.ts            Z80TestMachine — platform-agnostic Z80 execution core
   calling-convention/
     types.ts              CallingConvention interface and argument types
+    sdcccall0.ts          SDCC __sdcccall(0) convention implementation
     sdcccall1.ts          SDCC __sdcccall(1) convention implementation
   devices/
     tms9918.ts            TMS9918 VDP capture (MSX, ColecoVision, SG-1000)
   symbols/
-    sdcc.ts               SDCC .noi/.lst symbol parsing + SdccSymbolProvider
+    sdcc.ts               SDCC .noi/.lst symbol parsing + SdccSymbols
   adapters/
     msx/                  MSX adapter: memory map, BIOS hooks, factory
   callc.ts                High-level C function caller
@@ -91,9 +93,9 @@ User Tests (driving adapter)
 ```
 
 1. **Z80TestMachine** is the core — it runs Z80 code, manages memory and registers, and delegates hardware I/O to injected ports.
-2. **Adapters** (like `createMsxTestbed()`) compose the core with platform-specific `MemoryMap`, `Hardware`, and `SymbolProvider` implementations.
+2. **Adapters** (like `createMsxTestbed()`) compose the core with platform-specific `MemoryMap` and `Hardware` implementations. Symbols are managed separately.
 3. **Devices** (like `Tms9918`) are reusable peripheral emulations shared across adapters.
-4. A `HALT` instruction at address `0x0000` acts as a sentinel — `runFunction()` pushes `0x0000` as the return address, so when the function executes `RET`, the CPU halts.
+4. A `HALT` instruction at address `0x0000` acts as a sentinel — `runFrom()` pushes `0x0000` as the return address, so when the function executes `RET`, the CPU halts.
 5. A configurable cycle limit (default 100,000 T-states) prevents infinite loops.
 
 ## API Reference
@@ -104,19 +106,10 @@ Factory function that creates an MSX testing environment with VDP capture, keybo
 
 ```typescript
 import { readFileSync } from 'fs'
-import { createMsxTestbed, SdccSymbolProvider } from 'z80-testing-library'
+import { createMsxTestbed } from 'z80-testing-library'
 
-// Option 1: let the adapter load symbols from files
 const { machine, vdp, keyboard } = createMsxTestbed({
   rom: new Uint8Array(readFileSync('game.rom')),
-  symbolsPath: 'game.noi',      // SDCC .noi symbol file
-  lstDir: './build',             // directory with .lst files (for static symbols)
-})
-
-// Option 2: pass a pre-built symbol provider
-const { machine, vdp, keyboard } = createMsxTestbed({
-  rom: new Uint8Array(readFileSync('game.rom')),
-  symbols: SdccSymbolProvider.fromFiles('game.noi', './build'),
   romLoadAddress: 0x4000,        // default: 0x4000 (slot 1)
   stackPointer: 0xF380,          // default: 0xF380
   extraStubs: [0x1234],          // additional addresses to stub with RET
@@ -128,6 +121,8 @@ Returns `{ machine, vdp, keyboard }`:
 - **vdp** — `Tms9918` instance for VDP/VRAM inspection
 - **keyboard** — `Uint8Array(16)` for keyboard matrix simulation
 
+Symbols are managed separately — see [SdccSymbols](#sdccsymbols).
+
 ### Z80TestMachine
 
 The platform-agnostic core. Used directly for bare Z80 testing, or via an adapter for platform-specific testing.
@@ -138,7 +133,6 @@ import { Z80TestMachine } from 'z80-testing-library'
 const m = new Z80TestMachine({
   memoryMap: myMemoryMap,        // MemoryMap port (write protection, defaults)
   hardware: myHardware,          // Hardware port (I/O, hooks, stubs)
-  symbols: mySymbolProvider,     // SymbolProvider port (name → address)
   rom: myRomData,                // ROM as Uint8Array
   romLoadAddress: 0x4000,        // where to load ROM
   regions: [[0x100, myCode]],    // additional memory regions
@@ -150,20 +144,12 @@ const m = new Z80TestMachine({
 
 All config fields are optional — with no arguments you get a flat 64KB all-writable Z80.
 
-#### Symbol Access
-
-| Method | Description |
-|---|---|
-| `sym(name)` | Look up a symbol address by name. Throws if not found. |
-| `hasSym(name)` | Check if a symbol exists. Returns boolean. |
-
 #### Execution
 
 | Method | Description |
 |---|---|
-| `runFunction(name, cycleLimit?)` | Run a function by symbol name. Returns T-states consumed. |
 | `runFrom(addr, cycleLimit?)` | Run from a raw address. Returns T-states consumed. |
-| `elapsedTStates` | T-states from the last `runFunction`/`runFrom` call. |
+| `elapsedTStates` | T-states from the last `runFrom` call. |
 
 #### Registers
 
@@ -192,7 +178,7 @@ m.regs.ix   // index registers: ix, iy
 Implement these to add support for a new Z80 platform:
 
 ```typescript
-import type { MemoryMap, Hardware, SymbolProvider } from 'z80-testing-library'
+import type { MemoryMap, Hardware, Symbols } from 'z80-testing-library'
 
 // Memory layout — defines address space characteristics
 const myMemoryMap: MemoryMap = {
@@ -210,8 +196,13 @@ const myHardware: Hardware = {
 }
 
 // Symbols — name-to-address resolution
-const mySymbols: SymbolProvider = {
-  resolve: (name) => symbolTable.get(name),
+const mySymbols: Symbols = {
+  query: (name) => symbolTable.get(name),
+  get: (name) => {
+    const addr = symbolTable.get(name)
+    if (addr === undefined) throw new Error(`Unknown symbol: ${name}`)
+    return addr
+  },
   has: (name) => symbolTable.has(name),
 }
 ```
@@ -236,26 +227,27 @@ vdp.clear()                        // clear recorded writes (keep VRAM)
 vdp.clearAll()                     // clear everything including VRAM
 ```
 
-### SdccSymbolProvider
+### SdccSymbols
 
 Symbol resolution for programs compiled with SDCC. Parses `.noi` content for exported symbols and `.lst` content for static (non-exported) symbols. See [Appendix: How SDCC Symbol Resolution Works](#appendix-how-sdcc-symbol-resolution-works) for details on why both file types are needed.
 
 ```typescript
-import { SdccSymbolProvider } from 'z80-testing-library'
+import { SdccSymbols } from 'z80-testing-library'
 
 // From file paths (convenience — reads .noi, .lk, and .lst files automatically)
-const symbols = SdccSymbolProvider.fromFiles('build/game.noi', './build')
+const symbols = SdccSymbols.fromFiles('build/game.noi', './build')
 
 // From content strings (no I/O — useful for testing or non-filesystem sources)
-const ordered = SdccSymbolProvider.parseLk(lkContent, {
+const ordered = SdccSymbols.parseLk(lkContent, {
   main: mainLstContent,
   physics: physicsLstContent,
   render: renderLstContent,
 })
-const symbols = new SdccSymbolProvider(noiContent, ordered)
+const symbols = new SdccSymbols(noiContent, ordered)
 
-symbols.resolve('game_loop')       // → 0x400B (exported function)
-symbols.resolve('clamp_position')  // → 0x4018 (static function, from .lst)
+symbols.get('game_loop')           // → 0x400B (exported function, throws if missing)
+symbols.query('game_loop')         // → 0x400B (returns undefined if missing)
+symbols.query('clamp_position')    // → 0x4018 (static function, from .lst)
 symbols.has('game_loop')           // → true
 ```
 
@@ -264,24 +256,26 @@ symbols.has('game_loop')           // → true
 Declarative C function binding. Define the signature once, bind to a machine, and get a fully typed callable. This is the recommended way to test C functions.
 
 ```typescript
-import { defC } from 'z80-testing-library'
+import { defC, SdccSymbols } from 'z80-testing-library'
 
-// Define signatures — reusable, no machine dependency
-const paddleHeight = defC('paddle_height', ['u8'], 'u8')
-const setRect = defC('set_rect', ['u8', 'u8', 'u8', 'u8'], 'void')
-const getEntity = defC('get_entity', ['u16'], 'u16')
+const symbols = SdccSymbols.fromFiles('build/game.noi', './build')
+
+// Define schemas — reusable, no machine dependency
+const paddleHeightSchema = defC(symbols.get('paddle_height'), ['u8'], 'u8')
+const setRectSchema = defC(symbols.get('set_rect'), ['u8', 'u8', 'u8', 'u8'], 'void')
+const getEntitySchema = defC(symbols.get('get_entity'), ['u16'], 'u16')
 
 // Bind to a machine — typically in beforeEach or describe scope
-const ph = paddleHeight(m)
-const sr = setRect(m)
+const paddleHeight = paddleHeightSchema(m)
+const setRect = setRectSchema(m)
 
 // Call with values — TypeScript enforces correct argument count and types
-expect(ph(0)).toBe(16)
-expect(ph(1)).toBe(24)
-sr(5, 3, 3, 4)
+expect(paddleHeight(0)).toBe(16)
+expect(paddleHeight(1)).toBe(24)
+setRect(5, 3, 3, 4)
 
 // Inline binding when reuse isn't needed
-const rng = defC('next_rng', [], 'u8')(m)
+const rng = defC(symbols.get('next_rng'), [], 'u8')(m)
 expect(rng()).toBeGreaterThan(0)
 ```
 
@@ -292,20 +286,21 @@ expect(rng()).toBeGreaterThan(0)
 **`detailed()`:** When you need cycle counts, use `.detailed()` instead of calling directly:
 
 ```typescript
-const result = ph.detailed(0)  // → { value: 16, tStates: 234 }
+const result = paddleHeight.detailed(0)  // → { value: 16, tStates: 234 }
 ```
 
-**Sharing signatures across test files:**
+**Sharing schemas across test files:**
 
 ```typescript
 // test/helpers/game-functions.ts
-export const paddleHeight = defC('paddle_height', ['u8'], 'u8')
-export const setRect = defC('set_rect', ['u8', 'u8', 'u8', 'u8'], 'void')
+const symbols = SdccSymbols.fromFiles('build/game.noi', './build')
+export const paddleHeightSchema = defC(symbols.get('paddle_height'), ['u8'], 'u8')
+export const setRectSchema = defC(symbols.get('set_rect'), ['u8', 'u8', 'u8', 'u8'], 'void')
 
 // test/paddle.test.ts
-import { paddleHeight } from './helpers/game-functions'
-const ph = paddleHeight(m)
-expect(ph(0)).toBe(16)
+import { paddleHeightSchema } from './helpers/game-functions'
+const paddleHeight = paddleHeightSchema(m)
+expect(paddleHeight(0)).toBe(16)
 ```
 
 #### Options
@@ -323,14 +318,14 @@ Imperative helper for one-off C function calls. Useful when you don't need to pr
 import { callC } from 'z80-testing-library'
 
 // uint8_t add_offset(uint8_t val)
-const result = callC(m, 'add_offset', { args: [10], ret: 'u8' })
+const result = callC(m, symbols.get('add_offset'), { args: [10], ret: 'u8' })
 expect(result.value).toBe(15)
 
 // void set_rect(uint8_t col, uint8_t row, uint8_t w, uint8_t h)
-callC(m, 'set_rect', { args: [5, 3, 3, 4] })
+callC(m, symbols.get('set_rect'), { args: [5, 3, 3, 4] })
 
 // uint16_t get_address(uint16_t *ptr)
-const r = callC(m, 'get_address', {
+const r = callC(m, symbols.get('get_address'), {
   args: [{ type: 'u16', value: 0xC100 }],
   ret: 'u16',
 })
@@ -369,10 +364,10 @@ const myConvention: CallingConvention = {
 }
 
 // With defC
-const myFunc = defC('my_func', ['u8', 'u8'], 'u8', { cc: myConvention })
+const myFuncSchema = defC(symbols.get('my_func'), ['u8', 'u8'], 'u8', { cc: myConvention })
 
 // With callC
-callC(m, 'my_func', { args: [1, 2], ret: 'u8', cc: myConvention })
+callC(m, symbols.get('my_func'), { args: [1, 2], ret: 'u8', cc: myConvention })
 ```
 
 ### Utility Functions
@@ -423,9 +418,9 @@ The default convention for SDCC 4.x targeting Z80. Used automatically by `defC` 
 import { defC } from 'z80-testing-library'
 
 // No cc option needed — sdcccall1 is the default
-const addOffset = defC('add_offset', ['u8'], 'u8')(m)
-const updateEntity = defC('update_entity', ['u16', 'u8'], 'void')(m)
-const setRect = defC('set_rect', ['u8', 'u8', 'u8', 'u8'], 'void')(m)
+const addOffset = defC(symbols.get('add_offset'), ['u8'], 'u8')(m)
+const updateEntity = defC(symbols.get('update_entity'), ['u16', 'u8'], 'void')(m)
+const setRect = defC(symbols.get('set_rect'), ['u8', 'u8', 'u8', 'u8'], 'void')(m)
 
 addOffset(10)
 updateEntity(entityAddr, 0x01)
@@ -444,7 +439,7 @@ All parameters on the stack. Used by SDCC for BIOS wrapper functions and older c
 import { defC, sdcccall0 } from 'z80-testing-library'
 
 const cc = sdcccall0()
-const biosRead = defC('bios_read_sector', ['u8', 'u16'], 'u8', { cc })(m)
+const biosRead = defC(symbols.get('bios_read_sector'), ['u8', 'u16'], 'u8', { cc })(m)
 expect(biosRead(0x01, 0x1800)).toBe(expectedResult)
 ```
 
@@ -465,19 +460,19 @@ const hitechC: CallingConvention = {
   },
 }
 
-const myFunc = defC('my_func', ['u8', 'u8'], 'u8', { cc: hitechC })(m)
+const myFunc = defC(symbols.get('my_func'), ['u8', 'u8'], 'u8', { cc: hitechC })(m)
 ```
 
 ### Low-level register/stack management
 
-When using `runFunction` directly, you manage calling conventions manually:
+When using `runFrom` directly, you manage calling conventions manually:
 
 ```typescript
 import { pushStackArg } from 'z80-testing-library'
 
 // sdcccall(1): uint8_t add_offset(uint8_t val)
 m.regs.a = 10
-m.runFunction('add_offset')
+m.runFrom(symbols.get('add_offset'))
 const result = m.regs.a
 
 // sdcccall(1): void set_rect(uint8_t col, uint8_t row, uint8_t w, uint8_t h)
@@ -486,7 +481,7 @@ m.regs.a = 5
 pushStackArg(m, 4) // h (pushed first = higher on stack)
 pushStackArg(m, 3) // w
 pushStackArg(m, 3) // row (pushed last = lower on stack, read first)
-m.runFunction('set_rect')
+m.runFrom(symbols.get('set_rect'))
 ```
 
 ## Testing Patterns
@@ -495,7 +490,7 @@ m.runFunction('set_rect')
 
 ```typescript
 // Using defC (recommended)
-const dirToIndex = defC('dir_to_index', ['u8'], 'u8')(m)
+const dirToIndex = defC(symbols.get('dir_to_index'), ['u8'], 'u8')(m)
 
 it('converts direction to index', () => {
   expect(dirToIndex(0x04)).toBe(0) // DIR_DOWN
@@ -504,7 +499,7 @@ it('converts direction to index', () => {
 // Using the low-level API
 it('converts direction to index', () => {
   m.regs.a = 0x04 // DIR_DOWN
-  m.runFunction('dir_to_index')
+  m.runFrom(symbols.get('dir_to_index'))
   expect(m.regs.a).toBe(0)
 })
 ```
@@ -512,13 +507,13 @@ it('converts direction to index', () => {
 ### Testing a Function That Reads/Writes Globals
 
 ```typescript
-const nextRng = defC('next_rng', [], 'u8')(m)
+const nextRng = defC(symbols.get('next_rng'), [], 'u8')(m)
 
 it('advances the RNG state', () => {
-  m.writeByte(m.sym('rng'), 42)
+  m.writeByte(symbols.get('rng'), 42)
   const expected = (42 * 109 + 31) & 0xFF
   expect(nextRng()).toBe(expected)
-  expect(m.readByte(m.sym('rng'))).toBe(expected)
+  expect(m.readByte(symbols.get('rng'))).toBe(expected)
 })
 ```
 
@@ -528,12 +523,12 @@ Define read/write helpers for your game's struct layouts:
 
 ```typescript
 const OBJ_SIZE = 15
-const processKnockback = defC('process_knockback', ['u16'], 'void')(m)
+const processKnockback = defC(symbols.get('process_knockback'), ['u16'], 'void')(m)
 
 function writeObj(m: Z80TestMachine, index: number, fields: Partial<{
   active: number, x: number, y: number, dir: number, hp: number
 }>) {
-  const base = m.sym('objs') + index * OBJ_SIZE
+  const base = symbols.get('objs') + index * OBJ_SIZE
   m.writeByte(base + 0, fields.active ?? 1)
   m.writeByte(base + 2, fields.x ?? 0x80)
   m.writeByte(base + 3, fields.y ?? 0x80)
@@ -543,8 +538,8 @@ function writeObj(m: Z80TestMachine, index: number, fields: Partial<{
 
 it('processes knockback', () => {
   writeObj(m, 0, { active: 1, x: 0x80, y: 0x80 })
-  processKnockback(m.sym('objs'))
-  expect(m.readByte(m.sym('objs') + 2)).not.toBe(0x80) // x changed
+  processKnockback(symbols.get('objs'))
+  expect(m.readByte(symbols.get('objs') + 2)).not.toBe(0x80) // x changed
 })
 ```
 
@@ -556,8 +551,8 @@ it('processes knockback', () => {
 
 it('reads right arrow press', () => {
   keyboard[8] = 0xFF & ~(1 << 7) // Right pressed
-  m.runFunction('read_input')
-  expect(m.readByte(m.sym('inputDir'))).toBe(0x01) // DIR_RIGHT
+  m.runFrom(symbols.get('read_input'))
+  expect(m.readByte(symbols.get('inputDir'))).toBe(0x01) // DIR_RIGHT
 })
 ```
 
@@ -566,7 +561,7 @@ it('reads right arrow press', () => {
 ```typescript
 it('updates sprite position in SAT', () => {
   writeObj(m, 0, { x: 0x80, y: 0x60 })
-  m.runFunction('update_sprites')
+  m.runFrom(symbols.get('update_sprites'))
 
   const sprite = vdp.readSatEntry(0)
   expect(sprite.x).toBe(0x80)
@@ -578,11 +573,11 @@ it('updates sprite position in SAT', () => {
 
 ```typescript
 it('places wall tiles', () => {
-  const addr = m.sym('tileMap')
+  const addr = symbols.get('tileMap')
   for (let i = 0; i < 22 * 32; i++) m.writeByte(addr + i, 0x26)
 
   m.regs.a = 0  // room_id
-  m.runFunction('build_room_tilemap')
+  m.runFrom(symbols.get('build_room_tilemap'))
 
   expect(m.readByte(addr + 0 * 32 + 15)).toBe(0x90) // TILE_WALL
 })
@@ -657,10 +652,10 @@ export function createSpectrumTestbed(config) {
 
 6. **Cycle limits.** Default is 100,000 T-states. Pass a higher limit for complex functions:
    ```typescript
-   m.runFunction('build_room_tilemap', 500_000)
+   m.runFrom(symbols.get('build_room_tilemap'), 500_000)
    ```
 
-7. **No file I/O in the core.** The `Z80TestMachine` and `SdccSymbolProvider` constructor accept raw data (`Uint8Array`, content strings), not file paths. Use `SdccSymbolProvider.fromFiles()` or `readFileSync` for disk loading, or provide data directly for browser-compatible usage.
+7. **No file I/O in the core.** The `Z80TestMachine` and `SdccSymbols` constructor accept raw data (`Uint8Array`, content strings), not file paths. Use `SdccSymbols.fromFiles()` or `readFileSync` for disk loading, or provide data directly for browser-compatible usage.
 
 ## Appendix: How SDCC Symbol Resolution Works
 
@@ -681,8 +676,8 @@ static uint8_t collision_count = 0;     // static variable
 Normally you'd only test exported functions — they define the public interface of each module. But on a retro platform with tight ROM constraints, functions tend to be large and deeply intertwined. Testing through exported entry points alone may require complex setup or provide limited observability. Being able to call static helpers directly gives you a more practical way to isolate behavior:
 
 ```typescript
-m.runFunction('clamp_position')  // call a static function directly
-m.readByte(m.sym('collision_count'))  // read a static variable
+m.runFrom(symbols.get('clamp_position'))  // call a static function directly
+m.readByte(symbols.get('collision_count'))  // read a static variable
 ```
 
 ### SDCC build artifacts
@@ -721,16 +716,16 @@ source.c  →  sdcc -c  →  source.rel, source.lst, ...
 
 ### Using `fromFiles` vs. the constructor
 
-`SdccSymbolProvider.fromFiles(noiPath, lstDir)` handles everything automatically — reads the `.noi`, parses the `.lk` for link order, and loads `.lst` files in the correct sequence.
+`SdccSymbols.fromFiles(noiPath, lstDir)` handles everything automatically — reads the `.noi`, parses the `.lk` for link order, and loads `.lst` files in the correct sequence.
 
 For manual control (or non-filesystem sources), use `parseLk` to establish the correct order, then pass content strings to the constructor:
 
 ```typescript
-const ordered = SdccSymbolProvider.parseLk(lkContent, {
+const ordered = SdccSymbols.parseLk(lkContent, {
   main: mainLstContent,
   physics: physicsLstContent,
 })
-const provider = new SdccSymbolProvider(noiContent, ordered)
+const provider = new SdccSymbols(noiContent, ordered)
 ```
 
 The `OrderedLstContents` branded type returned by `parseLk` ensures the constructor receives correctly ordered content — passing a plain `string[]` is a type error.

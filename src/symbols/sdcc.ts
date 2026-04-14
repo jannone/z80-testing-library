@@ -1,6 +1,6 @@
 import { readFileSync, readdirSync, existsSync } from 'fs'
 import { resolve, basename } from 'path'
-import type { SymbolProvider } from '../core/types.js'
+import type { Symbols } from '../core/types.js'
 
 export interface SymbolMap {
   /** All raw symbols from the .noi file (with leading underscore) */
@@ -160,10 +160,10 @@ export function parseStaticSymbols(
 export type OrderedLstContents = string[] & { readonly __brand: 'OrderedLstContents' }
 
 /**
- * SymbolProvider implementation for SDCC-compiled programs.
+ * Symbols implementation for SDCC-compiled programs.
  * Resolves both exported (.noi) and static (.lst) symbols.
  */
-export class SdccSymbolProvider implements SymbolProvider {
+export class SdccSymbols implements Symbols {
   private noiSymbols: SymbolMap
   private staticSymbols: Map<string, number> | null
 
@@ -189,10 +189,10 @@ export class SdccSymbolProvider implements SymbolProvider {
   }
 
   /** Create from file paths (convenience for loading from disk) */
-  static fromFiles(noiPath: string, lstDir?: string): SdccSymbolProvider {
+  static fromFiles(noiPath: string, lstDir?: string): SdccSymbols {
     const noiContent = readFileSync(noiPath, 'utf-8')
     if (!lstDir) {
-      return new SdccSymbolProvider(noiContent)
+      return new SdccSymbols(noiContent)
     }
 
     const lkPath = noiPath.replace(/\.noi$/, '.lk')
@@ -205,17 +205,25 @@ export class SdccSymbolProvider implements SymbolProvider {
       for (const f of allLst) {
         lstByName[f.replace(/\.lst$/, '')] = readFileSync(resolve(lstDir, f), 'utf-8')
       }
-      ordered = SdccSymbolProvider.parseLk(lkContent, lstByName)
+      ordered = SdccSymbols.parseLk(lkContent, lstByName)
     } else {
       ordered = allLst.map(f => readFileSync(resolve(lstDir, f), 'utf-8')) as OrderedLstContents
     }
 
-    return new SdccSymbolProvider(noiContent, ordered)
+    return new SdccSymbols(noiContent, ordered)
   }
 
-  resolve(name: string): number | undefined {
+  query(name: string): number | undefined {
     return this.noiSymbols.clean.get(name)
       ?? this.staticSymbols?.get(name)
+  }
+
+  get(name: string): number {
+    const addr = this.query(name)
+    if (addr === undefined) {
+      throw new Error(`Unknown symbol: ${name}`)
+    }
+    return addr
   }
 
   has(name: string): boolean {

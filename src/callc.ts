@@ -1,4 +1,4 @@
-import type { Z80TestMachine } from './core/machine.js'
+import type { MachineInterface } from './core/types.js'
 import type { CallingConvention, ArgValue, ArgType, RetType } from './calling-convention/types.js'
 import { sdcccall1 } from './calling-convention/sdcccall1.js'
 
@@ -27,16 +27,16 @@ export interface CallCResult {
 const defaultCC = sdcccall1()
 
 /**
- * Call a C function by name using a high-level interface.
+ * Call a C function by address using a high-level interface.
  *
  * Arguments are placed according to the calling convention (default: SDCC __sdcccall(1)),
  * the function is executed, and the return value is extracted from the appropriate register.
  */
-export function callC(m: Z80TestMachine, name: string, opts: CallCOptions = {}): CallCResult {
+export function callC(m: MachineInterface, addr: number, opts: CallCOptions = {}): CallCResult {
   const { args = [], ret = 'void', cc = defaultCC, cycleLimit } = opts
 
   cc.placeArgs(m, args)
-  const tStates = m.runFunction(name, cycleLimit)
+  const tStates = m.runFrom(addr, cycleLimit)
   const value = cc.readReturn(m, ret)
 
   return { value, tStates }
@@ -64,7 +64,7 @@ export interface BoundCFunction<A extends readonly ArgType[], R extends RetType>
 
 /** An unbound C function signature — call with a machine to bind */
 export interface CSignature<A extends readonly ArgType[], R extends RetType> {
-  (m: Z80TestMachine): BoundCFunction<A, R>
+  (m: MachineInterface): BoundCFunction<A, R>
 }
 
 export interface DefCOptions {
@@ -80,30 +80,30 @@ export interface DefCOptions {
  * to get a typed callable.
  *
  * @example
- * const paddleHeight = defC('paddle_height', ['u8'], 'u8')
+ * const paddleHeight = defC(symbols.get('paddle_height'), ['u8'], 'u8')
  * const ph = paddleHeight(m)
  * expect(ph(0)).toBe(16)
  *
  * @example
  * // Inline binding
- * const paddleHeight = defC('paddle_height', ['u8'], 'u8')(m)
+ * const paddleHeight = defC(symbols.get('paddle_height'), ['u8'], 'u8')(m)
  * expect(paddleHeight(0)).toBe(16)
  */
 export function defC<const A extends readonly ArgType[], R extends RetType>(
-  name: string,
+  addr: number,
   args: A,
   ret: R,
   opts: DefCOptions = {},
 ): CSignature<A, R> {
   const { cc = defaultCC, cycleLimit } = opts
 
-  return ((m: Z80TestMachine): BoundCFunction<A, R> => {
+  return ((m: MachineInterface): BoundCFunction<A, R> => {
     function exec(values: number[]): CallCResult {
       const argValues: ArgValue[] = values.map((v, i) => {
         const type = args[i]
         return type === 'u16' ? { type: 'u16' as const, value: v } : v
       })
-      return callC(m, name, { args: argValues, ret, cc, cycleLimit })
+      return callC(m, addr, { args: argValues, ret, cc, cycleLimit })
     }
 
     const fn = (...values: MapArgs<A>): MapRet<R> => {

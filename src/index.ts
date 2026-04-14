@@ -7,7 +7,7 @@ export {
 export {
   type MemoryMap,
   type Hardware,
-  type SymbolProvider,
+  type Symbols,
   type PcHook,
   type PortReadHandler,
   type PortWriteHandler,
@@ -26,7 +26,7 @@ export {
 
 // Symbols
 export {
-  SdccSymbolProvider,
+  SdccSymbols,
   type OrderedLstContents,
 } from './symbols/sdcc.js'
 
