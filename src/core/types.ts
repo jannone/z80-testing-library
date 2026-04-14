@@ -26,6 +26,7 @@ export interface MachineInterface {
   readWord(addr: number): number
   writeWord(addr: number, val: number): void
   writeBlock(addr: number, data: Uint8Array | number[]): void
+  runFrom(addr: number, cycleLimit?: number): number
 }
 
 /** Memory layout port — defines address space characteristics */
@@ -44,7 +45,8 @@ export interface Hardware {
 }
 
 /** Symbol resolution port — maps names to addresses */
-export interface SymbolProvider {
-  resolve(name: string): number | undefined
+export interface Symbols {
+  query(name: string): number | undefined
+  get(name: string): number
   has(name: string): boolean
 }

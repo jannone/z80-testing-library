@@ -1,7 +1,6 @@
-import { Z80TestMachine, type Z80TestMachineConfig } from '../../core/machine.js'
-import type { PcHook, MemoryRegion, SymbolProvider } from '../../core/types.js'
+import { Z80TestMachine } from '../../core/machine.js'
+import type { PcHook, MemoryRegion } from '../../core/types.js'
 import { Tms9918 } from '../../devices/tms9918.js'
-import { SdccSymbolProvider } from '../../symbols/sdcc.js'
 import { msxMemoryMap } from './memory-map.js'
 import { createMsxHardware } from './hardware.js'
 
@@ -14,15 +13,6 @@ export interface MsxTestbedConfig {
 
   /** ROM load address (default: 0x4000 for MSX cartridge slot 1) */
   romLoadAddress?: number
-
-  /** Pre-built symbol provider (takes precedence over symbolsPath/lstDir) */
-  symbols?: SymbolProvider
-
-  /** Path to SDCC .noi symbol file */
-  symbolsPath?: string
-
-  /** Directory containing SDCC .lst files for static symbol resolution */
-  lstDir?: string
 
   /** Initial stack pointer (default: 0xF380) */
   stackPointer?: number
@@ -49,15 +39,9 @@ export function createMsxTestbed(config: MsxTestbedConfig = {}): MsxTestbed {
 
   const hardware = createMsxHardware(vdp, keyboard)
 
-  const symbols = config.symbols
-    ?? (config.symbolsPath
-      ? SdccSymbolProvider.fromFiles(config.symbolsPath, config.lstDir)
-      : undefined)
-
   const machine = new Z80TestMachine({
     memoryMap: msxMemoryMap,
     hardware,
-    symbols,
     rom: config.rom,
     romLoadAddress: config.romLoadAddress,
     regions: config.regions,

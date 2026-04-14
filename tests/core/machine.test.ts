@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { Z80TestMachine } from '../../src/core/machine.js'
-import type { MemoryMap, Hardware, SymbolProvider, PcHook } from '../../src/core/types.js'
+import type { MemoryMap, Hardware, PcHook } from '../../src/core/types.js'
 
 const CODE_BASE = 0x100
 
@@ -334,54 +334,6 @@ describe('user hooks merge with hardware hooks', () => {
   })
 })
 
-describe('with SymbolProvider port', () => {
-  it('sym() resolves via SymbolProvider', () => {
-    const symbols: SymbolProvider = {
-      resolve: (name) => name === 'my_func' ? 0x4030 : undefined,
-      has: (name) => name === 'my_func',
-    }
-    const m = new Z80TestMachine({ symbols })
-    expect(m.sym('my_func')).toBe(0x4030)
-  })
-
-  it('sym() throws for unknown symbol', () => {
-    const symbols: SymbolProvider = {
-      resolve: () => undefined,
-      has: () => false,
-    }
-    const m = new Z80TestMachine({ symbols })
-    expect(() => m.sym('nope')).toThrow(/Unknown symbol/)
-  })
-
-  it('hasSym() delegates to SymbolProvider', () => {
-    const symbols: SymbolProvider = {
-      resolve: (name) => name === 'exists' ? 0x100 : undefined,
-      has: (name) => name === 'exists',
-    }
-    const m = new Z80TestMachine({ symbols })
-    expect(m.hasSym('exists')).toBe(true)
-    expect(m.hasSym('nope')).toBe(false)
-  })
-
-  it('hasSym returns false when no symbol provider', () => {
-    const m = createMachine(halt())
-    expect(m.hasSym('anything')).toBe(false)
-  })
-
-  it('runFunction resolves symbol and executes', () => {
-    const code = ldaRet(77)
-    const symbols: SymbolProvider = {
-      resolve: (name) => name === 'load77' ? CODE_BASE : undefined,
-      has: (name) => name === 'load77',
-    }
-    const m = new Z80TestMachine({
-      symbols,
-      regions: [[CODE_BASE, code]],
-    })
-    m.runFunction('load77')
-    expect(m.regs.a).toBe(77)
-  })
-})
 
 describe('hook can modify registers', () => {
   it('hook sets register A', () => {

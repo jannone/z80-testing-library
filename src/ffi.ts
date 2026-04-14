@@ -1,8 +1,8 @@
-import type { Z80TestMachine } from './core/machine.js'
+import type { MachineInterface } from './core/types.js'
 import type { CallingConvention, ArgValue, ArgType, RetType } from './calling-convention/types.js'
 import { sdcccall1 } from './calling-convention/sdcccall1.js'
 
-export interface CallCOptions {
+export interface CallOptions {
   /** Arguments to pass (bare numbers are u8, use { type: 'u16', value } for 16-bit) */
   args?: ArgValue[]
 
@@ -16,7 +16,7 @@ export interface CallCOptions {
   cycleLimit?: number
 }
 
-export interface CallCResult {
+export interface CallResult {
   /** Return value (0 for void) */
   value: number
 
@@ -27,22 +27,22 @@ export interface CallCResult {
 const defaultCC = sdcccall1()
 
 /**
- * Call a C function by name using a high-level interface.
+ * Call a foreign function by address.
  *
  * Arguments are placed according to the calling convention (default: SDCC __sdcccall(1)),
  * the function is executed, and the return value is extracted from the appropriate register.
  */
-export function callC(m: Z80TestMachine, name: string, opts: CallCOptions = {}): CallCResult {
+function call(m: MachineInterface, addr: number, opts: CallOptions = {}): CallResult {
   const { args = [], ret = 'void', cc = defaultCC, cycleLimit } = opts
 
   cc.placeArgs(m, args)
-  const tStates = m.runFunction(name, cycleLimit)
+  const tStates = m.runFrom(addr, cycleLimit)
   const value = cc.readReturn(m, ret)
 
   return { value, tStates }
 }
 
-// ---- defC: declarative function binding with curried machine ----
+// ---- def: declarative function binding with curried machine ----
 
 /** Maps ArgType strings to TypeScript types */
 type ArgTypeTs = { u8: number; u16: number }
@@ -55,19 +55,19 @@ type MapArgs<T extends readonly ArgType[]> = {
 /** Maps a RetType string to the corresponding TS return type */
 type MapRet<R extends RetType> = R extends 'void' ? void : number
 
-/** A bound C function — callable with argument values */
-export interface BoundCFunction<A extends readonly ArgType[], R extends RetType> {
+/** A bound function — callable with argument values */
+export interface BoundFunction<A extends readonly ArgType[], R extends RetType> {
   (...args: MapArgs<A>): MapRet<R>
   /** Call and return full result with tStates */
-  detailed(...args: MapArgs<A>): CallCResult
+  detailed(...args: MapArgs<A>): CallResult
 }
 
-/** An unbound C function signature — call with a machine to bind */
-export interface CSignature<A extends readonly ArgType[], R extends RetType> {
-  (m: Z80TestMachine): BoundCFunction<A, R>
+/** An unbound function schema — call with a machine to bind */
+export interface FnSchema<A extends readonly ArgType[], R extends RetType> {
+  (m: MachineInterface): BoundFunction<A, R>
 }
 
-export interface DefCOptions {
+export interface DefOptions {
   /** Calling convention (default: sdcccall1) */
   cc?: CallingConvention
 
@@ -76,34 +76,34 @@ export interface DefCOptions {
 }
 
 /**
- * Define a C function binding. Declares the signature once, then bind to a machine
+ * Define a foreign function binding. Declares the signature once, then bind to a machine
  * to get a typed callable.
  *
  * @example
- * const paddleHeight = defC('paddle_height', ['u8'], 'u8')
- * const ph = paddleHeight(m)
- * expect(ph(0)).toBe(16)
+ * const paddleHeightSchema = ffi.def(symbols.get('paddle_height'), ['u8'], 'u8')
+ * const paddleHeight = paddleHeightSchema(m)
+ * expect(paddleHeight(0)).toBe(16)
  *
  * @example
  * // Inline binding
- * const paddleHeight = defC('paddle_height', ['u8'], 'u8')(m)
+ * const paddleHeight = ffi.def(symbols.get('paddle_height'), ['u8'], 'u8')(m)
  * expect(paddleHeight(0)).toBe(16)
  */
-export function defC<const A extends readonly ArgType[], R extends RetType>(
-  name: string,
+function def<const A extends readonly ArgType[], R extends RetType>(
+  addr: number,
   args: A,
   ret: R,
-  opts: DefCOptions = {},
-): CSignature<A, R> {
+  opts: DefOptions = {},
+): FnSchema<A, R> {
   const { cc = defaultCC, cycleLimit } = opts
 
-  return ((m: Z80TestMachine): BoundCFunction<A, R> => {
-    function exec(values: number[]): CallCResult {
+  return ((m: MachineInterface): BoundFunction<A, R> => {
+    function exec(values: number[]): CallResult {
       const argValues: ArgValue[] = values.map((v, i) => {
         const type = args[i]
         return type === 'u16' ? { type: 'u16' as const, value: v } : v
       })
-      return callC(m, name, { args: argValues, ret, cc, cycleLimit })
+      return call(m, addr, { args: argValues, ret, cc, cycleLimit })
     }
 
     const fn = (...values: MapArgs<A>): MapRet<R> => {
@@ -111,10 +111,12 @@ export function defC<const A extends readonly ArgType[], R extends RetType>(
       return (ret === 'void' ? undefined : result.value) as MapRet<R>
     }
 
-    fn.detailed = (...values: MapArgs<A>): CallCResult => {
+    fn.detailed = (...values: MapArgs<A>): CallResult => {
       return exec(values as number[])
     }
 
-    return fn as BoundCFunction<A, R>
-  }) as CSignature<A, R>
+    return fn as BoundFunction<A, R>
+  }) as FnSchema<A, R>
 }
+
+export const ffi = { def, call } as const
