@@ -1,6 +1,7 @@
 import type { MachineInterface } from './core/types.js'
 import type { CallingConvention, ArgValue, ArgType, RetType } from './calling-convention/types.js'
 import { sdcccall1 } from './calling-convention/sdcccall1.js'
+import { signed8 } from './utils.js'
 
 export interface CallOptions {
   /** Arguments to pass (bare numbers are u8, use { type: 'u16', value } for 16-bit) */
@@ -119,4 +120,66 @@ function def<const A extends readonly ArgType[], R extends RetType>(
   }) as FnSchema<A, R>
 }
 
-export const ffi = { def, call } as const
+// ---- var: typed global variable binding ----
+
+/** Variable type discriminator */
+export type VarType = 'u8' | 'i8' | 'u16' | 'i16'
+
+/** Maps VarType to the TypeScript type returned by get() */
+type MapVarType<T extends VarType> = number
+
+/** A bound variable — read/write a typed value at a fixed address */
+export interface BoundVariable<T extends VarType> {
+  /** Read the current value */
+  get(): MapVarType<T>
+  /** Write a new value */
+  set(value: MapVarType<T>): void
+  /** The memory address of this variable */
+  readonly addr: number
+}
+
+/** An unbound variable schema — call with a machine to bind */
+export interface VarSchema<T extends VarType> {
+  (m: MachineInterface): BoundVariable<T>
+}
+
+const varReaders: Record<VarType, (m: MachineInterface, addr: number) => number> = {
+  u8: (m, addr) => m.readByte(addr),
+  i8: (m, addr) => signed8(m.readByte(addr)),
+  u16: (m, addr) => m.readWord(addr),
+  i16: (m, addr) => { const v = m.readWord(addr); return v > 32767 ? v - 65536 : v },
+}
+
+const varWriters: Record<VarType, (m: MachineInterface, addr: number, val: number) => void> = {
+  u8: (m, addr, val) => m.writeByte(addr, val),
+  i8: (m, addr, val) => m.writeByte(addr, val & 0xFF),
+  u16: (m, addr, val) => m.writeWord(addr, val),
+  i16: (m, addr, val) => m.writeWord(addr, val & 0xFFFF),
+}
+
+/**
+ * Define a typed global variable binding. Declares the type once, then bind to a machine
+ * to get a typed accessor.
+ *
+ * @example
+ * const score = ffi.var(symbols.get('score'), 'u8')(m)
+ * score.set(42)
+ * expect(score.get()).toBe(42)
+ *
+ * @example
+ * const velocity = ffi.var(symbols.get('velocity'), 'i8')(m)
+ * velocity.set(-5)
+ * expect(velocity.get()).toBe(-5)
+ */
+function varDef<T extends VarType>(addr: number, type: T): VarSchema<T> {
+  const read = varReaders[type]
+  const write = varWriters[type]
+
+  return (m: MachineInterface): BoundVariable<T> => ({
+    get: () => read(m, addr),
+    set: (value: number) => write(m, addr, value),
+    addr,
+  })
+}
+
+export const ffi = { def, call, var: varDef } as const
