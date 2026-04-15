@@ -69,7 +69,7 @@ src/
     sdcc.ts               SDCC .noi/.lst symbol parsing + SdccSymbols
   adapters/
     msx/                  MSX adapter: memory map, BIOS hooks, factory
-  ffi.ts                  Foreign function interface (def + call)
+  ffi.ts                  Foreign function interface (def + call + var)
   utils.ts                Helpers: pushStackArg, signed8
 ```
 
@@ -379,6 +379,62 @@ const myFuncSchema = ffi.def(symbols.get('my_func'), ['u8', 'u8'], 'u8', { cc: m
 ffi.call(m, symbols.get('my_func'), { args: [1, 2], ret: 'u8', cc: myConvention })
 ```
 
+### ffi.var()
+
+Typed global variable binding. Declares the type once, bind to a machine, and get a typed `get`/`set` accessor. Useful for reading and writing SDCC global and static variables without manually choosing `readByte`/`readWord`.
+
+```typescript
+import { ffi, SdccSymbols } from 'z80-testing-library'
+
+const symbols = SdccSymbols.fromFiles('build/game.noi', './build')
+
+// Define schemas — reusable, no machine dependency
+const scoreSchema    = ffi.var(symbols.get('score'), 'u8')
+const highScoreSchema = ffi.var(symbols.get('high_score'), 'u16')
+const velocitySchema = ffi.var(symbols.get('velocity'), 'i8')
+
+// Bind to a machine — typically in beforeEach or describe scope
+const score     = scoreSchema(m)
+const highScore = highScoreSchema(m)
+const velocity  = velocitySchema(m)
+
+// Read and write
+score.set(42)
+expect(score.get()).toBe(42)
+
+velocity.set(-5)
+expect(velocity.get()).toBe(-5)  // signed
+
+// Inline binding when reuse isn't needed
+const lives = ffi.var(symbols.get('lives'), 'u8')(m)
+lives.set(3)
+```
+
+**Supported types:**
+
+| Type | Size | Range | Description |
+|---|---|---|---|
+| `'u8'` | 1 byte | 0–255 | Unsigned byte |
+| `'i8'` | 1 byte | -128–127 | Signed byte (two's complement) |
+| `'u16'` | 2 bytes | 0–65535 | Unsigned word, little-endian |
+| `'i16'` | 2 bytes | -32768–32767 | Signed word, little-endian |
+
+**`addr` property:** Each bound variable exposes `.addr` for cases where you need the raw address.
+
+**Sharing schemas across test files:**
+
+```typescript
+// test/helpers/game-vars.ts
+const symbols = SdccSymbols.fromFiles('build/game.noi', './build')
+export const scoreSchema    = ffi.var(symbols.get('score'), 'u8')
+export const highScoreSchema = ffi.var(symbols.get('high_score'), 'u16')
+
+// test/score.test.ts
+import { scoreSchema } from './helpers/game-vars'
+const score = scoreSchema(m)
+score.set(0)
+```
+
 ### Utility Functions
 
 ```typescript
@@ -517,12 +573,13 @@ it('converts direction to index', () => {
 
 ```typescript
 const nextRng = ffi.def(symbols.get('next_rng'), [], 'u8')(m)
+const rng     = ffi.var(symbols.get('rng'), 'u8')(m)
 
 it('advances the RNG state', () => {
-  m.writeByte(symbols.get('rng'), 42)
+  rng.set(42)
   const expected = (42 * 109 + 31) & 0xFF
   expect(nextRng()).toBe(expected)
-  expect(m.readByte(symbols.get('rng'))).toBe(expected)
+  expect(rng.get()).toBe(expected)
 })
 ```
 

@@ -47,6 +47,9 @@ export {
   type DefOptions,
   type FnSchema,
   type BoundFunction,
+  type VarType,
+  type VarSchema,
+  type BoundVariable,
 } from './ffi.js'
 
 export {
