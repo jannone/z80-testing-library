@@ -38,6 +38,29 @@ m.runFrom(symbols.get('my_function'))
 expect(m.regs.a).toBe(expectedResult)
 ```
 
+## Quick Start (ZX Spectrum)
+
+Build your program with z88dk (`zcc +zx -clib=sdcc_iy -m -create-app …`) —
+you get `hello.tap` and `hello.map`. Load both into the Spectrum testbed:
+
+```typescript
+import { readFileSync } from 'fs'
+import {
+  createSpectrumTestbed, extractCodeFromTap, Z88dkSymbols,
+  sdcccall0, ffi,
+} from 'z80-testing-library'
+
+const { code, loadAddress } = extractCodeFromTap(new Uint8Array(readFileSync('hello.tap')))
+const symbols = Z88dkSymbols.fromFile('hello.map')
+const { machine: m } = createSpectrumTestbed({ regions: [[loadAddress, code]] })
+
+// z88dk's sdcc_iy clib uses __sdcccall(0): all args on stack, return in L/HL.
+const clampAdd = ffi.fn(symbols.get('clamp_add'), ['u8', 'u8'], 'u8', {
+  cc: sdcccall0(),
+}).bind(m)
+expect(clampAdd(200, 100)).toBe(255)
+```
+
 ## Quick Start (Bare Z80)
 
 For platform-independent Z80 testing (no MSX assumptions):
@@ -67,8 +90,10 @@ src/
     tms9918.ts            TMS9918 VDP capture (MSX, ColecoVision, SG-1000)
   symbols/
     sdcc.ts               SDCC .noi/.lst symbol parsing + SdccSymbols
+    z88dk.ts              z88dk .map symbol parsing + Z88dkSymbols
   adapters/
     msx/                  MSX adapter: memory map, BIOS hooks, factory
+    spectrum/             ZX Spectrum adapter: memory map, .tap loader
   ffi.ts                  Foreign function interface (fn + call + var)
   utils.ts                Helpers: pushStackArg, signed8
 ```
@@ -86,9 +111,9 @@ User Tests (driving adapter)
   │  MemoryMap · Hardware              │
   └──┬──────────┬──────────────────────┘
      │          │
-  ┌──▼───┐  ┌──▼───┐  ┌────────────┐
-  │ MSX  │  │ Bare │  │ future ... │
-  └──────┘  └──────┘  └────────────┘
+  ┌──▼───┐  ┌────▼────┐  ┌──▼───┐  ┌────────────┐
+  │ MSX  │  │ Spectrum│  │ Bare │  │ future ... │
+  └──────┘  └─────────┘  └──────┘  └────────────┘
 
   Symbols (SdccSymbols, etc.) are managed independently
   and passed to ffi.fn / ffi.call for name → address resolution.
@@ -124,6 +149,49 @@ Returns `{ machine, vdp, keyboard }`:
 - **keyboard** — `Uint8Array(16)` for keyboard matrix simulation
 
 Symbols are managed separately — see [SdccSymbols](#sdccsymbols).
+
+### createSpectrumTestbed()
+
+Factory for a ZX Spectrum 48K testing environment: 16K ROM write-protected at `0x0000-0x3FFF`, RAM above `0x4000`, stack at `0xFF58`, default ORG `0x8000` (z88dk's `+zx` default).
+
+```typescript
+import { readFileSync } from 'fs'
+import {
+  createSpectrumTestbed, extractCodeFromTap, Z88dkSymbols,
+} from 'z80-testing-library'
+
+const { code, loadAddress } = extractCodeFromTap(
+  new Uint8Array(readFileSync('hello.tap')),
+)
+const symbols = Z88dkSymbols.fromFile('hello.map')
+
+const { machine } = createSpectrumTestbed({
+  regions: [[loadAddress, code]], // load the extracted .tap CODE block
+  stackPointer: 0xFF58,           // default
+  hooks: new Map(),               // install PC hooks for ROM routines
+  extraStubs: [0x10A8],           // or stub addresses with RET
+})
+```
+
+Returns `{ machine }` — no VDP/keyboard wrappers yet. The ULA is not modelled; install PC hooks for ROM routines (RST 0x10, CHAN_OPEN, etc.) if your code depends on them.
+
+Pair with [`Z88dkSymbols`](#z88dksymbols) for name resolution and [`sdcccall0()`](#sdcccall0--bios-wrappers) as the calling convention for z88dk's `-clib=sdcc_iy` output.
+
+### extractCodeFromTap()
+
+Parses a ZX Spectrum `.tap` tape image and returns the first CODE block (type 3) plus its advertised load address.
+
+```typescript
+import { extractCodeFromTap } from 'z80-testing-library'
+import { readFileSync } from 'fs'
+
+const { code, loadAddress } = extractCodeFromTap(
+  new Uint8Array(readFileSync('hello.tap')),
+)
+// → code: Uint8Array of the binary, loadAddress: 0x8000 (for +zx defaults)
+```
+
+Accepts `Uint8Array`, not a path — callers load the file themselves so the library stays browser-compatible. Throws if the tape has no CODE block (BASIC-only tape, bad file, etc.). For a multi-code-block tape, only the first CODE block is returned.
 
 ### Z80TestMachine
 
@@ -258,6 +326,32 @@ symbols.get('game_loop')           // → 0x400B (exported function, throws if m
 symbols.query('game_loop')         // → 0x400B (returns undefined if missing)
 symbols.query('clamp_position')    // → 0x4018 (static function, from .lst)
 symbols.has('game_loop')           // → true
+```
+
+### Z88dkSymbols
+
+Symbol resolution for programs compiled with z88dk. z88dk emits its own linker map format (not SDCC's `.noi`/`.lst`), so `SdccSymbols` does not apply — use this instead.
+
+Pass `-m` to `zcc` so the map file is written:
+
+```
+zcc +zx -clib=sdcc_iy -m -o hello -create-app hello.c    # produces hello.map
+```
+
+Map lines look like `_name = $HEX ; addr, public, ...`. The parser strips the SDCC leading underscore for ergonomic lookups and skips non-address lines (constants from `.inc` files).
+
+```typescript
+import { Z88dkSymbols } from 'z80-testing-library'
+
+// From a file path
+const symbols = Z88dkSymbols.fromFile('build/hello.map')
+
+// From a content string (no I/O — useful for tests or non-filesystem sources)
+const symbols2 = new Z88dkSymbols(mapContent)
+
+symbols.get('clamp_add')       // → 0x9363 (throws if missing)
+symbols.query('clamp_add')     // → 0x9363 (undefined if missing)
+symbols.has('clamp_add')       // → true
 ```
 
 ### ffi.fn()
@@ -695,34 +789,38 @@ The MSX adapter enforces the standard MSX memory layout:
 
 ## Adding a New Platform
 
-To support a new Z80 computer, implement the two port interfaces and write a factory function:
+To support a new Z80 computer, implement the two port interfaces and write a factory function. The built-in Spectrum adapter (`src/adapters/spectrum/`) is the canonical minimal example — a memory map with nothing but write protection, a hardware port with no I/O modelling, and a thin factory:
 
 ```typescript
-// adapters/spectrum/index.ts
+// src/adapters/amstradcpc/index.ts (hypothetical)
 import { Z80TestMachine } from 'z80-testing-library'
 import type { MemoryMap, Hardware } from 'z80-testing-library'
 
-const spectrumMemoryMap: MemoryMap = {
-  defaultRomLoadAddress: 0x8000,
-  defaultStackPointer: 0xFF00,
-  isWritable: (addr) => addr >= 0x4000,  // 16K ROM at 0x0000-0x3FFF
+const cpcMemoryMap: MemoryMap = {
+  defaultRomLoadAddress: 0x0100,
+  defaultStackPointer: 0xC000,
+  isWritable: (addr) => addr < 0xC000,  // 16K ROM at 0xC000-0xFFFF
 }
 
-const spectrumHardware: Hardware = {
-  readPort: (port) => { /* ULA, etc. */ return 0xFF },
-  writePort: (port, value) => { /* ULA, etc. */ },
+const cpcHardware: Hardware = {
+  readPort: (port) => 0xFF,   // stub — implement gate array etc. if needed
+  writePort: () => {},
   hooks: new Map(),
   stubs: [],
 }
 
-export function createSpectrumTestbed(config) {
-  return new Z80TestMachine({
-    memoryMap: spectrumMemoryMap,
-    hardware: spectrumHardware,
-    ...config,
-  })
+export function createCpcTestbed(config) {
+  return {
+    machine: new Z80TestMachine({
+      memoryMap: cpcMemoryMap,
+      hardware: cpcHardware,
+      ...config,
+    }),
+  }
 }
 ```
+
+See the MSX adapter for how to wire in a device (VDP) and hook real BIOS entry points when your target needs more than a stub.
 
 ## Tips and Gotchas
 
