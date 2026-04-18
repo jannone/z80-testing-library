@@ -30,6 +30,10 @@ export {
   type OrderedLstContents,
 } from './symbols/sdcc.js'
 
+export {
+  Z88dkSymbols,
+} from './symbols/z88dk.js'
+
 // Adapters — MSX
 export {
   createMsxTestbed,
@@ -38,6 +42,17 @@ export {
   type MsxTestbedConfig,
   type MsxTestbed,
 } from './adapters/msx/index.js'
+
+// Adapters — ZX Spectrum
+export {
+  createSpectrumTestbed,
+  spectrumMemoryMap,
+  spectrumHardware,
+  extractCodeFromTap,
+  type SpectrumTestbedConfig,
+  type SpectrumTestbed,
+  type TapCode,
+} from './adapters/spectrum/index.js'
 
 // FFI — foreign function interface
 export {
