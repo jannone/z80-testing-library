@@ -140,13 +140,13 @@ describe('sdcccall0', () => {
     })
   })
 
-  describe('works with ffi.def', () => {
+  describe('works with ffi.fn', () => {
     it('binds with custom cc option', () => {
       // LD L, 77 ; RET
       const { m, addr } = createMachineWithFunctions({
         get77: new Uint8Array([0x2E, 77, 0xC9]),
       })
-      const get77 = ffi.def(addr.get77, [], 'u8', { cc })(m)
+      const get77 = ffi.fn(addr.get77, [], 'u8', { cc }).bind(m)
       expect(get77()).toBe(77)
     })
   })

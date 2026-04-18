@@ -24,8 +24,8 @@ const { machine: m, vdp, keyboard } = createMsxTestbed({
 })
 
 // Define a function binding — signature declared once, fully typed
-const myFunctionSchema = ffi.def(symbols.get('my_function'), ['u8'], 'u8')
-const myFunction = myFunctionSchema(m)
+const myFunctionSchema = ffi.fn(symbols.get('my_function'), ['u8'], 'u8')
+const myFunction = myFunctionSchema.bind(m)
 expect(myFunction(42)).toBe(expectedResult)
 
 // Or use ffi.call for one-off calls without pre-declaring the signature
@@ -69,7 +69,7 @@ src/
     sdcc.ts               SDCC .noi/.lst symbol parsing + SdccSymbols
   adapters/
     msx/                  MSX adapter: memory map, BIOS hooks, factory
-  ffi.ts                  Foreign function interface (def + call + var)
+  ffi.ts                  Foreign function interface (fn + call + var)
   utils.ts                Helpers: pushStackArg, signed8
 ```
 
@@ -91,7 +91,7 @@ User Tests (driving adapter)
   └──────┘  └──────┘  └────────────┘
 
   Symbols (SdccSymbols, etc.) are managed independently
-  and passed to ffi.def / ffi.call for name → address resolution.
+  and passed to ffi.fn / ffi.call for name → address resolution.
 ```
 
 1. **Z80TestMachine** is the core — it runs Z80 code, manages memory and registers, and delegates hardware I/O to injected ports.
@@ -260,7 +260,7 @@ symbols.query('clamp_position')    // → 0x4018 (static function, from .lst)
 symbols.has('game_loop')           // → true
 ```
 
-### ffi.def()
+### ffi.fn()
 
 Declarative function binding. Define the signature once, bind to a machine, and get a fully typed callable. This is the recommended way to test compiled functions.
 
@@ -270,13 +270,13 @@ import { ffi, SdccSymbols } from 'z80-testing-library'
 const symbols = SdccSymbols.fromFiles('build/game.noi', './build')
 
 // Define schemas — reusable, no machine dependency
-const paddleHeightSchema = ffi.def(symbols.get('paddle_height'), ['u8'], 'u8')
-const setRectSchema = ffi.def(symbols.get('set_rect'), ['u8', 'u8', 'u8', 'u8'], 'void')
-const getEntitySchema = ffi.def(symbols.get('get_entity'), ['u16'], 'u16')
+const paddleHeightSchema = ffi.fn(symbols.get('paddle_height'), ['u8'], 'u8')
+const setRectSchema = ffi.fn(symbols.get('set_rect'), ['u8', 'u8', 'u8', 'u8'], 'void')
+const getEntitySchema = ffi.fn(symbols.get('get_entity'), ['u16'], 'u16')
 
 // Bind to a machine — typically in beforeEach or describe scope
-const paddleHeight = paddleHeightSchema(m)
-const setRect = setRectSchema(m)
+const paddleHeight = paddleHeightSchema.bind(m)
+const setRect = setRectSchema.bind(m)
 
 // Call with values — TypeScript enforces correct argument count and types
 expect(paddleHeight(0)).toBe(16)
@@ -284,15 +284,26 @@ expect(paddleHeight(1)).toBe(24)
 setRect(5, 3, 3, 4)
 
 // Inline binding when reuse isn't needed
-const rng = ffi.def(symbols.get('next_rng'), [], 'u8')(m)
+const rng = ffi.fn(symbols.get('next_rng'), [], 'u8').bind(m)
 expect(rng()).toBeGreaterThan(0)
+
+// Or skip the bind step entirely for one-shot use
+expect(ffi.fn(symbols.get('next_rng'), [], 'u8').call(m)).toBeGreaterThan(0)
 ```
 
 **Argument types:** Declared as an array of `'u8'` and `'u16'` strings. At the call site, all values are plain numbers — the signature tells the calling convention how to place each one.
 
 **Return type:** `'void'` functions return `undefined`. `'u8'` and `'u16'` functions return `number`.
 
-**`detailed()`:** When you need cycle counts, use `.detailed()` instead of calling directly:
+**Schema methods:**
+
+| Method | Purpose |
+|---|---|
+| `schema.bind(m)` | Returns a reusable `BoundFunction` that closes over the machine |
+| `schema.call(m, ...args)` | One-shot invoke — returns the value only |
+| `schema.callDetailed(m, ...args)` | One-shot invoke — returns `{ value, tStates }` |
+
+**`bound.detailed()`:** On a bound function, use `.detailed()` to get cycle counts:
 
 ```typescript
 const result = paddleHeight.detailed(0)  // → { value: 16, tStates: 234 }
@@ -303,12 +314,12 @@ const result = paddleHeight.detailed(0)  // → { value: 16, tStates: 234 }
 ```typescript
 // test/helpers/game-functions.ts
 const symbols = SdccSymbols.fromFiles('build/game.noi', './build')
-export const paddleHeightSchema = ffi.def(symbols.get('paddle_height'), ['u8'], 'u8')
-export const setRectSchema = ffi.def(symbols.get('set_rect'), ['u8', 'u8', 'u8', 'u8'], 'void')
+export const paddleHeightSchema = ffi.fn(symbols.get('paddle_height'), ['u8'], 'u8')
+export const setRectSchema = ffi.fn(symbols.get('set_rect'), ['u8', 'u8', 'u8', 'u8'], 'void')
 
 // test/paddle.test.ts
 import { paddleHeightSchema } from './helpers/game-functions'
-const paddleHeight = paddleHeightSchema(m)
+const paddleHeight = paddleHeightSchema.bind(m)
 expect(paddleHeight(0)).toBe(16)
 ```
 
@@ -355,7 +366,7 @@ const r = ffi.call(m, symbols.get('get_address'), {
 
 #### Custom Calling Conventions
 
-Both `ffi.def` and `ffi.call` accept a custom calling convention via the `cc` option. Implement the `CallingConvention` interface to support a different compiler:
+Both `ffi.fn` and `ffi.call` accept a custom calling convention via the `cc` option. Implement the `CallingConvention` interface to support a different compiler:
 
 ```typescript
 import type { CallingConvention } from 'z80-testing-library'
@@ -372,8 +383,8 @@ const myConvention: CallingConvention = {
   },
 }
 
-// With ffi.def
-const myFuncSchema = ffi.def(symbols.get('my_func'), ['u8', 'u8'], 'u8', { cc: myConvention })
+// With ffi.fn
+const myFuncSchema = ffi.fn(symbols.get('my_func'), ['u8', 'u8'], 'u8', { cc: myConvention })
 
 // With ffi.call
 ffi.call(m, symbols.get('my_func'), { args: [1, 2], ret: 'u8', cc: myConvention })
@@ -394,9 +405,9 @@ const highScoreSchema = ffi.var(symbols.get('high_score'), 'u16')
 const velocitySchema = ffi.var(symbols.get('velocity'), 'i8')
 
 // Bind to a machine — typically in beforeEach or describe scope
-const score     = scoreSchema(m)
-const highScore = highScoreSchema(m)
-const velocity  = velocitySchema(m)
+const score     = scoreSchema.bind(m)
+const highScore = highScoreSchema.bind(m)
+const velocity  = velocitySchema.bind(m)
 
 // Read and write
 score.set(42)
@@ -406,8 +417,12 @@ velocity.set(-5)
 expect(velocity.get()).toBe(-5)  // signed
 
 // Inline binding when reuse isn't needed
-const lives = ffi.var(symbols.get('lives'), 'u8')(m)
+const lives = ffi.var(symbols.get('lives'), 'u8').bind(m)
 lives.set(3)
+
+// Or skip the bind step for one-shot reads/writes
+scoreSchema.set(m, 100)
+expect(scoreSchema.get(m)).toBe(100)
 ```
 
 **Supported types:**
@@ -419,7 +434,16 @@ lives.set(3)
 | `'u16'` | 2 bytes | 0–65535 | Unsigned word, little-endian |
 | `'i16'` | 2 bytes | -32768–32767 | Signed word, little-endian |
 
-**`addr` property:** Each bound variable exposes `.addr` for cases where you need the raw address.
+**Schema methods:**
+
+| Method | Purpose |
+|---|---|
+| `schema.bind(m)` | Returns a reusable `BoundVariable` (`.get()`, `.set(v)`, `.addr`) |
+| `schema.get(m)` | One-shot read against a machine |
+| `schema.set(m, v)` | One-shot write against a machine |
+| `schema.addr` | The memory address (no machine needed) |
+
+**`addr` property:** Both the schema and each bound variable expose `.addr` for cases where you need the raw address.
 
 **Sharing schemas across test files:**
 
@@ -431,7 +455,7 @@ export const highScoreSchema = ffi.var(symbols.get('high_score'), 'u16')
 
 // test/score.test.ts
 import { scoreSchema } from './helpers/game-vars'
-const score = scoreSchema(m)
+const score = scoreSchema.bind(m)
 score.set(0)
 ```
 
@@ -466,7 +490,7 @@ TMS9918_LAYOUT.SPT     // 0x3800 (Sprite Pattern Table)
 
 ## Calling Conventions
 
-The library ships with two SDCC calling conventions. `ffi.def` and `ffi.call` handle the details automatically — you just need to pick the right one.
+The library ships with two SDCC calling conventions. `ffi.fn` and `ffi.call` handle the details automatically — you just need to pick the right one.
 
 ### Built-in conventions
 
@@ -477,15 +501,15 @@ The library ships with two SDCC calling conventions. `ffi.def` and `ffi.call` ha
 
 ### `sdcccall1()` — SDCC default
 
-The default convention for SDCC 4.x targeting Z80. Used automatically by `ffi.def` and `ffi.call` unless overridden.
+The default convention for SDCC 4.x targeting Z80. Used automatically by `ffi.fn` and `ffi.call` unless overridden.
 
 ```typescript
 import { ffi } from 'z80-testing-library'
 
 // No cc option needed — sdcccall1 is the default
-const addOffset = ffi.def(symbols.get('add_offset'), ['u8'], 'u8')(m)
-const updateEntity = ffi.def(symbols.get('update_entity'), ['u16', 'u8'], 'void')(m)
-const setRect = ffi.def(symbols.get('set_rect'), ['u8', 'u8', 'u8', 'u8'], 'void')(m)
+const addOffset = ffi.fn(symbols.get('add_offset'), ['u8'], 'u8').bind(m)
+const updateEntity = ffi.fn(symbols.get('update_entity'), ['u16', 'u8'], 'void').bind(m)
+const setRect = ffi.fn(symbols.get('set_rect'), ['u8', 'u8', 'u8', 'u8'], 'void').bind(m)
 
 addOffset(10)
 updateEntity(entityAddr, 0x01)
@@ -504,7 +528,7 @@ All parameters on the stack. Used by SDCC for BIOS wrapper functions and older c
 import { ffi, sdcccall0 } from 'z80-testing-library'
 
 const cc = sdcccall0()
-const biosRead = ffi.def(symbols.get('bios_read_sector'), ['u8', 'u16'], 'u8', { cc })(m)
+const biosRead = ffi.fn(symbols.get('bios_read_sector'), ['u8', 'u16'], 'u8', { cc }).bind(m)
 expect(biosRead(0x01, 0x1800)).toBe(expectedResult)
 ```
 
@@ -525,7 +549,7 @@ const hitechC: CallingConvention = {
   },
 }
 
-const myFunc = ffi.def(symbols.get('my_func'), ['u8', 'u8'], 'u8', { cc: hitechC })(m)
+const myFunc = ffi.fn(symbols.get('my_func'), ['u8', 'u8'], 'u8', { cc: hitechC }).bind(m)
 ```
 
 ### Low-level register/stack management
@@ -554,8 +578,8 @@ m.runFrom(symbols.get('set_rect'))
 ### Testing a Pure Function
 
 ```typescript
-// Using ffi.def (recommended)
-const dirToIndex = ffi.def(symbols.get('dir_to_index'), ['u8'], 'u8')(m)
+// Using ffi.fn (recommended)
+const dirToIndex = ffi.fn(symbols.get('dir_to_index'), ['u8'], 'u8').bind(m)
 
 it('converts direction to index', () => {
   expect(dirToIndex(0x04)).toBe(0) // DIR_DOWN
@@ -572,8 +596,8 @@ it('converts direction to index', () => {
 ### Testing a Function That Reads/Writes Globals
 
 ```typescript
-const nextRng = ffi.def(symbols.get('next_rng'), [], 'u8')(m)
-const rng     = ffi.var(symbols.get('rng'), 'u8')(m)
+const nextRng = ffi.fn(symbols.get('next_rng'), [], 'u8').bind(m)
+const rng     = ffi.var(symbols.get('rng'), 'u8').bind(m)
 
 it('advances the RNG state', () => {
   rng.set(42)
@@ -589,7 +613,7 @@ Define read/write helpers for your game's struct layouts:
 
 ```typescript
 const OBJ_SIZE = 15
-const processKnockback = ffi.def(symbols.get('process_knockback'), ['u16'], 'void')(m)
+const processKnockback = ffi.fn(symbols.get('process_knockback'), ['u16'], 'void').bind(m)
 
 function writeObj(m: Z80TestMachine, index: number, fields: Partial<{
   active: number, x: number, y: number, dir: number, hp: number

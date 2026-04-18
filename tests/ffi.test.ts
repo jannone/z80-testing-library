@@ -211,15 +211,15 @@ describe('sdcccall1 placeArgs edge cases', () => {
   })
 })
 
-describe('ffi.def', () => {
+describe('ffi.fn', () => {
   describe('signature and binding', () => {
     it('defines a signature and binds to a machine', () => {
       // INC A ; RET
       const { m, addr } = createMachineWithFunctions({
         inc: new Uint8Array([0x3C, 0xC9]),
       })
-      const inc = ffi.def(addr.inc, ['u8'], 'u8')
-      const bound = inc(m)
+      const inc = ffi.fn(addr.inc, ['u8'], 'u8')
+      const bound = inc.bind(m)
       expect(bound(10)).toBe(11)
     })
 
@@ -228,7 +228,7 @@ describe('ffi.def', () => {
       const { m, addr } = createMachineWithFunctions({
         inc: new Uint8Array([0x3C, 0xC9]),
       })
-      const inc = ffi.def(addr.inc, ['u8'], 'u8')(m)
+      const inc = ffi.fn(addr.inc, ['u8'], 'u8').bind(m)
       expect(inc(10)).toBe(11)
     })
   })
@@ -239,7 +239,7 @@ describe('ffi.def', () => {
       const { m, addr } = createMachineWithFunctions({
         get99: new Uint8Array([0x3E, 99, 0xC9]),
       })
-      const get99 = ffi.def(addr.get99, [], 'u8')(m)
+      const get99 = ffi.fn(addr.get99, [], 'u8').bind(m)
       expect(get99()).toBe(99)
     })
 
@@ -248,7 +248,7 @@ describe('ffi.def', () => {
       const { m, addr } = createMachineWithFunctions({
         get_addr: new Uint8Array([0x11, 0x34, 0x12, 0xC9]),
       })
-      const getAddr = ffi.def(addr.get_addr, [], 'u16')(m)
+      const getAddr = ffi.fn(addr.get_addr, [], 'u16').bind(m)
       expect(getAddr()).toBe(0x1234)
     })
 
@@ -257,7 +257,7 @@ describe('ffi.def', () => {
       const { m, addr } = createMachineWithFunctions({
         nop: new Uint8Array([0x00, 0xC9]),
       })
-      const nop = ffi.def(addr.nop, [], 'void')(m)
+      const nop = ffi.fn(addr.nop, [], 'void').bind(m)
       expect(nop()).toBeUndefined()
     })
   })
@@ -268,7 +268,7 @@ describe('ffi.def', () => {
       const { m, addr } = createMachineWithFunctions({
         inc: new Uint8Array([0x3C, 0xC9]),
       })
-      const inc = ffi.def(addr.inc, ['u8'], 'u8')(m)
+      const inc = ffi.fn(addr.inc, ['u8'], 'u8').bind(m)
       expect(inc(0xFF)).toBe(0) // wraps
     })
 
@@ -277,7 +277,7 @@ describe('ffi.def', () => {
       const { m, addr } = createMachineWithFunctions({
         high_byte: new Uint8Array([0x7A, 0xC9]),
       })
-      const highByte = ffi.def(addr.high_byte, ['u16'], 'u8')(m)
+      const highByte = ffi.fn(addr.high_byte, ['u16'], 'u8').bind(m)
       expect(highByte(0xAB00)).toBe(0xAB)
     })
 
@@ -286,7 +286,7 @@ describe('ffi.def', () => {
       const { m, addr } = createMachineWithFunctions({
         add_ae: new Uint8Array([0x83, 0xC9]),
       })
-      const addAE = ffi.def(addr.add_ae, ['u8', 'u16'], 'u8')(m)
+      const addAE = ffi.fn(addr.add_ae, ['u8', 'u16'], 'u8').bind(m)
       // A=10 (first u8), DE=0x0005 (first u16), result = 10+5
       expect(addAE(10, 0x0005)).toBe(15)
     })
@@ -296,7 +296,7 @@ describe('ffi.def', () => {
       const { m, addr } = createMachineWithFunctions({
         read_stack: new Uint8Array([0xE1, 0xC1, 0xE5, 0x79, 0xC9]),
       })
-      const readStack = ffi.def(addr.read_stack, ['u8', 'u8'], 'u8')(m)
+      const readStack = ffi.fn(addr.read_stack, ['u8', 'u8'], 'u8').bind(m)
       expect(readStack(1, 42)).toBe(42)
     })
   })
@@ -307,7 +307,7 @@ describe('ffi.def', () => {
       const { m, addr } = createMachineWithFunctions({
         get99: new Uint8Array([0x3E, 99, 0xC9]),
       })
-      const get99 = ffi.def(addr.get99, [], 'u8')(m)
+      const get99 = ffi.fn(addr.get99, [], 'u8').bind(m)
       const result = get99.detailed()
       expect(result.value).toBe(99)
       expect(result.tStates).toBeGreaterThan(0)
@@ -318,7 +318,7 @@ describe('ffi.def', () => {
       const { m, addr } = createMachineWithFunctions({
         nops: new Uint8Array([0x00, 0x00, 0xC9]),
       })
-      const nops = ffi.def(addr.nops, [], 'void')(m)
+      const nops = ffi.fn(addr.nops, [], 'void').bind(m)
       const result = nops.detailed()
       expect(result.value).toBe(0)
       expect(result.tStates).toBeGreaterThan(0)
@@ -335,9 +335,9 @@ describe('ffi.def', () => {
         inc: new Uint8Array([0x3C, 0x3C, 0xC9]),
       })
 
-      const inc = ffi.def(addr1.inc, ['u8'], 'u8')
-      expect(inc(m1)(10)).toBe(11)
-      expect(inc(m2)(10)).toBe(12)
+      const inc = ffi.fn(addr1.inc, ['u8'], 'u8')
+      expect(inc.bind(m1)(10)).toBe(11)
+      expect(inc.bind(m2)(10)).toBe(12)
     })
   })
 
@@ -347,7 +347,7 @@ describe('ffi.def', () => {
       const { m, addr } = createMachineWithFunctions({
         f: new Uint8Array([0x3E, 77, 0xC9]),
       })
-      const f = ffi.def(addr.f, [], 'u8', { cc: sdcccall1() })(m)
+      const f = ffi.fn(addr.f, [], 'u8', { cc: sdcccall1() }).bind(m)
       expect(f()).toBe(77)
     })
   })
@@ -358,8 +358,38 @@ describe('ffi.def', () => {
       const { m, addr } = createMachineWithFunctions({
         get42: new Uint8Array([0x3E, 42, 0xC9]),
       })
-      const get42 = ffi.def(addr.get42, [], 'u8')(m)
+      const get42 = ffi.fn(addr.get42, [], 'u8').bind(m)
       expect(get42()).toBe(42)
+    })
+  })
+
+  describe('one-shot forms', () => {
+    it('call(m, ...args) returns the value directly', () => {
+      // INC A ; RET
+      const { m, addr } = createMachineWithFunctions({
+        inc: new Uint8Array([0x3C, 0xC9]),
+      })
+      const inc = ffi.fn(addr.inc, ['u8'], 'u8')
+      expect(inc.call(m, 10)).toBe(11)
+    })
+
+    it('callDetailed(m, ...args) returns value and tStates', () => {
+      // LD A, 99 ; RET
+      const { m, addr } = createMachineWithFunctions({
+        get99: new Uint8Array([0x3E, 99, 0xC9]),
+      })
+      const get99 = ffi.fn(addr.get99, [], 'u8')
+      const result = get99.callDetailed(m)
+      expect(result.value).toBe(99)
+      expect(result.tStates).toBeGreaterThan(0)
+    })
+
+    it('call(m) on void schema returns undefined', () => {
+      const { m, addr } = createMachineWithFunctions({
+        nop: new Uint8Array([0x00, 0xC9]),
+      })
+      const nop = ffi.fn(addr.nop, [], 'void')
+      expect(nop.call(m)).toBeUndefined()
     })
   })
 })
