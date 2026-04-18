@@ -43,7 +43,7 @@ function call(m: MachineInterface, addr: number, opts: CallOptions = {}): CallRe
   return { value, tStates }
 }
 
-// ---- def: declarative function binding with curried machine ----
+// ---- fn: declarative function binding ----
 
 /** Maps ArgType strings to TypeScript types */
 type ArgTypeTs = { u8: number; u16: number }
@@ -63,9 +63,14 @@ export interface BoundFunction<A extends readonly ArgType[], R extends RetType> 
   detailed(...args: MapArgs<A>): CallResult
 }
 
-/** An unbound function schema — call with a machine to bind */
+/** An unbound function schema — bind to a machine, or invoke one-shot */
 export interface FnSchema<A extends readonly ArgType[], R extends RetType> {
-  (m: MachineInterface): BoundFunction<A, R>
+  /** Bind to a machine, returning a reusable callable */
+  bind(m: MachineInterface): BoundFunction<A, R>
+  /** One-shot: invoke against a machine without keeping a bound reference */
+  call(m: MachineInterface, ...args: MapArgs<A>): MapRet<R>
+  /** One-shot with detailed result (value + tStates) */
+  callDetailed(m: MachineInterface, ...args: MapArgs<A>): CallResult
 }
 
 export interface DefOptions {
@@ -78,19 +83,20 @@ export interface DefOptions {
 
 /**
  * Define a foreign function binding. Declares the signature once, then bind to a machine
- * to get a typed callable.
+ * or invoke one-shot.
  *
  * @example
- * const paddleHeightSchema = ffi.def(symbols.get('paddle_height'), ['u8'], 'u8')
- * const paddleHeight = paddleHeightSchema(m)
+ * const paddleHeightSchema = ffi.fn(symbols.get('paddle_height'), ['u8'], 'u8')
+ * const paddleHeight = paddleHeightSchema.bind(m)
  * expect(paddleHeight(0)).toBe(16)
  *
  * @example
- * // Inline binding
- * const paddleHeight = ffi.def(symbols.get('paddle_height'), ['u8'], 'u8')(m)
- * expect(paddleHeight(0)).toBe(16)
+ * // One-shot
+ * const schema = ffi.fn(symbols.get('paddle_height'), ['u8'], 'u8')
+ * expect(schema.call(m, 0)).toBe(16)
+ * expect(schema.callDetailed(m, 0).tStates).toBeGreaterThan(0)
  */
-function def<const A extends readonly ArgType[], R extends RetType>(
+function fn<const A extends readonly ArgType[], R extends RetType>(
   addr: number,
   args: A,
   ret: R,
@@ -98,26 +104,33 @@ function def<const A extends readonly ArgType[], R extends RetType>(
 ): FnSchema<A, R> {
   const { cc = defaultCC, cycleLimit } = opts
 
-  return ((m: MachineInterface): BoundFunction<A, R> => {
-    function exec(values: number[]): CallResult {
-      const argValues: ArgValue[] = values.map((v, i) => {
-        const type = args[i]
-        return type === 'u16' ? { type: 'u16' as const, value: v } : v
-      })
-      return call(m, addr, { args: argValues, ret, cc, cycleLimit })
-    }
+  function exec(m: MachineInterface, values: number[]): CallResult {
+    const argValues: ArgValue[] = values.map((v, i) => {
+      const type = args[i]
+      return type === 'u16' ? { type: 'u16' as const, value: v } : v
+    })
+    return call(m, addr, { args: argValues, ret, cc, cycleLimit })
+  }
 
-    const fn = (...values: MapArgs<A>): MapRet<R> => {
-      const result = exec(values as number[])
+  return {
+    bind(m: MachineInterface): BoundFunction<A, R> {
+      const bound = (...values: MapArgs<A>): MapRet<R> => {
+        const result = exec(m, values as number[])
+        return (ret === 'void' ? undefined : result.value) as MapRet<R>
+      }
+      bound.detailed = (...values: MapArgs<A>): CallResult => exec(m, values as number[])
+      return bound as BoundFunction<A, R>
+    },
+
+    call(m: MachineInterface, ...values: MapArgs<A>): MapRet<R> {
+      const result = exec(m, values as number[])
       return (ret === 'void' ? undefined : result.value) as MapRet<R>
-    }
+    },
 
-    fn.detailed = (...values: MapArgs<A>): CallResult => {
-      return exec(values as number[])
-    }
-
-    return fn as BoundFunction<A, R>
-  }) as FnSchema<A, R>
+    callDetailed(m: MachineInterface, ...values: MapArgs<A>): CallResult {
+      return exec(m, values as number[])
+    },
+  }
 }
 
 // ---- var: typed global variable binding ----
@@ -138,9 +151,16 @@ export interface BoundVariable<T extends VarType> {
   readonly addr: number
 }
 
-/** An unbound variable schema — call with a machine to bind */
+/** An unbound variable schema — bind to a machine, or read/write one-shot */
 export interface VarSchema<T extends VarType> {
-  (m: MachineInterface): BoundVariable<T>
+  /** Bind to a machine, returning a reusable accessor */
+  bind(m: MachineInterface): BoundVariable<T>
+  /** One-shot read against a machine */
+  get(m: MachineInterface): MapVarType<T>
+  /** One-shot write against a machine */
+  set(m: MachineInterface, value: MapVarType<T>): void
+  /** The memory address of this variable */
+  readonly addr: number
 }
 
 const varReaders: Record<VarType, (m: MachineInterface, addr: number) => number> = {
@@ -159,27 +179,35 @@ const varWriters: Record<VarType, (m: MachineInterface, addr: number, val: numbe
 
 /**
  * Define a typed global variable binding. Declares the type once, then bind to a machine
- * to get a typed accessor.
+ * or read/write one-shot.
  *
  * @example
- * const score = ffi.var(symbols.get('score'), 'u8')(m)
+ * const score = ffi.var(symbols.get('score'), 'u8').bind(m)
  * score.set(42)
  * expect(score.get()).toBe(42)
  *
  * @example
- * const velocity = ffi.var(symbols.get('velocity'), 'i8')(m)
- * velocity.set(-5)
- * expect(velocity.get()).toBe(-5)
+ * // One-shot
+ * const velocity = ffi.var(symbols.get('velocity'), 'i8')
+ * velocity.set(m, -5)
+ * expect(velocity.get(m)).toBe(-5)
  */
 function varDef<T extends VarType>(addr: number, type: T): VarSchema<T> {
   const read = varReaders[type]
   const write = varWriters[type]
 
-  return (m: MachineInterface): BoundVariable<T> => ({
-    get: () => read(m, addr),
-    set: (value: number) => write(m, addr, value),
+  return {
+    bind(m: MachineInterface): BoundVariable<T> {
+      return {
+        get: () => read(m, addr),
+        set: (value: number) => write(m, addr, value),
+        addr,
+      }
+    },
+    get: (m: MachineInterface) => read(m, addr),
+    set: (m: MachineInterface, value: number) => write(m, addr, value),
     addr,
-  })
+  }
 }
 
-export const ffi = { def, call, var: varDef } as const
+export const ffi = { fn, call, var: varDef } as const
